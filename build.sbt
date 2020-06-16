@@ -12,6 +12,7 @@ lazy val commonSettings = Seq(
 
 lazy val deps = new {
   val wolkenpumpe = "2.40.0"
+  val submin      = "0.3.4"
 }
 
 lazy val root = project.in(file("."))
@@ -19,5 +20,6 @@ lazy val root = project.in(file("."))
   .settings(
     libraryDependencies ++= Seq(
       "de.sciss" %% "wolkenpumpe" % deps.wolkenpumpe,
+      "de.sciss" %  "submin"      % deps.submin,
     ),
   )
