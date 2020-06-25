@@ -13,12 +13,15 @@
 
 package de.sciss.infiltration
 
+import de.sciss.lucre.stm.Sys
 import de.sciss.lucre.synth.InMemory
 import de.sciss.nuages.{Nuages, ScissProcs, Wolkenpumpe, WolkenpumpeMain}
 import de.sciss.submin.Submin
 import de.sciss.synth.Server
+import de.sciss.synth.proc.Proc
+import de.sciss.synth.proc.Implicits._
 
-import scala.swing.Swing
+import scala.swing.{Button, Swing}
 
 object RecordTopologies {
   def main(args: Array[String]): Unit = {
@@ -29,10 +32,26 @@ object RecordTopologies {
     }
   }
 
+  def dumpTopology[S <: Sys[S]](n: Nuages[S])(implicit tx: S#Tx): Unit = {
+    n.surface match {
+      case Nuages.Surface.Folder(f) =>
+        f.iterator.foreach {
+          case p: Proc[S] =>
+            println(p.name)
+
+          case other =>
+            println(s"(ignoring $other)")
+        }
+
+      case Nuages.Surface.Timeline(_) =>
+        sys.error("Timeline not supported")
+    }
+  }
+
   def run(): Unit = {
     type S = InMemory
     implicit val system: S = InMemory()
-    val w = new WolkenpumpeMain[S] {
+    val w: WolkenpumpeMain[S] = new WolkenpumpeMain[S] {
       override protected def configure(sCfg: ScissProcs.ConfigBuilder, nCfg: Nuages.ConfigBuilder,
                                        aCfg: Server.ConfigBuilder): Unit = {
         super.configure(sCfg, nCfg, aCfg)
@@ -44,7 +63,13 @@ object RecordTopologies {
       }
     }
 
-    val nuagesH = system.step { implicit tx => tx.newHandle(Nuages.timeline[S]) }
+    val nuagesH = system.step { implicit tx => tx.newHandle(Nuages.folder[S]) }
     w.run(nuagesH)
+
+    w.view.addSouthComponent(Button("Dump Topology") {
+      system.step { implicit tx =>
+        dumpTopology(nuagesH())
+      }
+    })
   }
 }
