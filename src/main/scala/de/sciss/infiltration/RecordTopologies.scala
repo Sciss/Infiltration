@@ -56,7 +56,7 @@ object RecordTopologies {
                                        aCfg: Server.ConfigBuilder): Unit = {
         super.configure(sCfg, nCfg, aCfg)
         sCfg.genNumChannels = 4
-        nCfg.masterChannels = Some(0 until 4)
+        nCfg.mainChannels   = Some(0 until 4)
         nCfg.soloChannels   = None
         nCfg.lineInputs     = Vector.empty
         nCfg.lineOutputs    = Vector.empty
