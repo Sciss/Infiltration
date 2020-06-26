@@ -1,6 +1,6 @@
 /*
  *  RecordTopologies.scala
- *  (Infiltration)
+ *  (in|filtration)
  *
  *  Copyright (c) 2019-2020 Hanns Holger Rutz. All rights reserved.
  *

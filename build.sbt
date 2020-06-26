@@ -11,15 +11,21 @@ lazy val commonSettings = Seq(
 )
 
 lazy val deps = new {
-  val wolkenpumpe = "2.40.0"
+  val fscape      = "2.36.1"
+  val lucre       = "3.17.1"
   val submin      = "0.3.4"
+  val wolkenpumpe = "2.40.0"
 }
 
 lazy val root = project.in(file("."))
   .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "de.sciss" %% "wolkenpumpe" % deps.wolkenpumpe,
-      "de.sciss" %  "submin"      % deps.submin,
+      "de.sciss" %% "fscape-macros" % deps.fscape,
+      "de.sciss" %% "fscape-views"  % deps.fscape,
+      "de.sciss" %% "lucre-bdb"     % deps.lucre,
+      "de.sciss" %% "lucre-expr"    % deps.lucre,
+      "de.sciss" %  "submin"        % deps.submin,
+      "de.sciss" %% "wolkenpumpe"   % deps.wolkenpumpe,
     ),
   )

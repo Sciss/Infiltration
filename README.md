@@ -20,6 +20,3 @@ If have extracted the Mellite _zip_ download, you should be able to launch Melli
 Once the menu appears, you can then open the workspace that you have downloaded separately (extract the _.mllt.zip_ archive to obtain 
 the _.mllt_ directory/database). Select _File > Open_ and go into the parent directory of the _.mllt_ workspace, here select the _.mllt_
 directory (do not double click), then select the _Open_ button.
-
-__See [this short video tutorial](https://peertube.social/videos/watch/893158ab-7486-48d9-9bee-575f58493230) for a demo on how to download Mellite and open existing workspaces.__
-
