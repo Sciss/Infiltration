@@ -14,16 +14,29 @@
 package de.sciss.infiltration
 
 import de.sciss.file._
-import de.sciss.lucre.stm.Sys
-import de.sciss.lucre.synth.InMemory
+import de.sciss.lucre.expr.{BooleanObj, DoubleObj, IntObj}
+import de.sciss.lucre.stm
+import de.sciss.lucre.stm.store.BerkeleyDB
+import de.sciss.lucre.stm.{Folder, Sys}
 import de.sciss.mellite.{Application, Mellite}
-import de.sciss.negatum.{Negatum, Rendering}
+import de.sciss.negatum.impl.{ParamRanges, UGens}
+import de.sciss.negatum.{Negatum, Optimize, Rendering}
+import de.sciss.synth.SynthGraph
 import de.sciss.synth.io.AudioFile
-import de.sciss.synth.proc.{AudioCue, Universe}
+import de.sciss.synth.proc.Implicits._
+import de.sciss.synth.proc.{AudioCue, Durable, Proc, Universe, Workspace}
 import org.rogach.scallop.{ScallopConf, ScallopOption => Opt}
 
+import scala.collection.immutable.{IndexedSeq => Vec}
+import scala.concurrent.Future
+import scala.util.{Failure, Success, Try}
+
 object RunNegatum {
-  final case class Config(template: File, startFrame: Int = 1, endFrame: Int = -1) {
+  final case class Config(workspace: File, template: File, startFrame: Int, endFrame: Int,
+                          optimizeInterval: Int,
+                          genPop: Int,
+                          probMut: Double,
+                          probDefault: Double) {
     def formatTemplate(frame: Int): File = {
       template.replaceName(template.name.format(frame))
     }
@@ -34,6 +47,9 @@ object RunNegatum {
     object p extends ScallopConf(args) {
       printedName = "in|filtration"
 
+      val workspace: Opt[File] = opt(required = true,
+        descr = "Workspace to create and populate"
+      )
       val template: Opt[File] = opt(required = true,
         descr = "Template input sound file where %d is the frame place holder"
       )
@@ -43,44 +59,171 @@ object RunNegatum {
       val endFrame: Opt[Int] = opt("end-frame", required = true, validate = _ >= 0,
         descr = "End frame index (inclusive)"
       )
+      val optimizeInterval: Opt[Int] = opt("optimize-interval", validate = _ > 0, default = Some(36),
+        descr = "Optimization interval in frames"
+      )
+      val genPop: Opt[Int] = opt("gen-population", validate = _ > 0, default = Some(100),
+        descr = "Generation population size"
+      )
+      val probMut: Opt[Double] = opt("prob-mutation", validate = i => i >= 0.0 && i <= 1.0, default = Some(0.75),
+        descr = "Probability of mutation (0-1)"
+      )
+      val probDefault: Opt[Double] = opt("prob-default",
+        validate = i => i >= 0.0 && i <= 1.0, default = Some(0.001),
+        descr = "Probability of using default parameters (0-1)"
+      )
 
       verify()
       val config: Config = Config(
-        template = template(),
-        startFrame = startFrame(),
-        endFrame = endFrame()
+        workspace         = workspace(),
+        template          = template(),
+        startFrame        = startFrame(),
+        endFrame          = endFrame(),
+        optimizeInterval  = optimizeInterval(),
+        genPop            = genPop(),
+        probMut           = probMut(),
+        probDefault       = probDefault(),
       )
     }
 
-    type S = InMemory
-    implicit val system: S = InMemory()
-    implicit val universe: Universe[S] = system.step { implicit tx => Universe.dummy[S] }
-    run[S](p.config)
-  }
-
-  def run[S <: Sys[S]](config: Config)(implicit universe: Universe[S]): Unit = {
     Application.init(Mellite)
     Mellite.initTypes()
-//    Negatum.init()
 
-    val fStart    = config.formatTemplate(config.startFrame)
+    type S = Durable
+
+    val config  = p.config
+    val wsDir   = config.workspace
+
+    val (ws: Workspace[S], frame: Int, nH: stm.Source[S#Tx, Negatum[S]]) = if (wsDir.exists()) {
+      val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = false)
+      val _ws = Workspace.Durable.read(wsDir, dsf)
+      val (__frame, __nH) = _ws.system.step { implicit tx =>
+        val n = _ws.root.get(0) match {
+          case Some(n: Negatum[S]) => n
+          case _ => sys.error("Did not find 'Negatum' as first object of workspace")
+        }
+        val _frame = n.attr.$[IntObj]("frame").fold(config.startFrame)(_.value)
+        (_frame, tx.newHandle(n))
+      }
+      (_ws, __frame, __nH)
+
+    } else {
+      val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = true)
+      val _ws = Workspace.Durable.empty(wsDir, dsf)
+      val _nH = init(_ws, config)
+      (_ws, config.startFrame, _nH)
+    }
+
+    implicit val system: S = ws.system
+    implicit val universe: Universe[S] = system.step { implicit tx => Universe.dummy[S] }
+
+    val syncQuit = waitForQuit()
+
+    tweak()
+
+    iterate[S /*, system.I*/](ws, config, nH, frame = frame, syncQuit = syncQuit)
+  }
+
+  def tweak(): Unit = {
+    ParamRanges.map = ParamRanges.map.transform {
+      case ("GVerb", info) =>
+        info.copy(params = info.params ++ Map(
+          "roomSize"      -> ParamRanges.Spec(lo = 0.95, lessThan = Some("maxRoomSize")),  // lo!
+          "maxRoomSize"   -> ParamRanges.Spec(lo = 0.95, hi = 300.0 /* soft */, scalar = true)
+        ))
+
+      case ("Blip", info) =>
+        info.copy(params = info.params ++ Map(
+          "freq"    -> ParamRanges.Spec(lo = 10.0, hi = 60.0 /* ! */),
+          "numHarm" -> ParamRanges.Spec(lo = 1.0)
+        ))
+
+      case ("Impulse", info) =>
+        info.copy(params = info.params ++ Map(
+          "freq"    -> ParamRanges.Spec(lo = 0.1, hi = 60.0 /* ! */),
+          "phase"   -> ParamRanges.Spec(lo = 0.0, hi = 1.0)
+      ))
+
+      case (_, other) => other
+    }
+
+//    println(ParamRanges.map("GVerb"))
+  }
+
+  def init[S <: Sys[S]](ws: Workspace[S], config: Config): stm.Source[S#Tx, Negatum[S]] = {
+    val fStart = config.formatTemplate(config.startFrame)
     val specStart = AudioFile.readSpec(fStart)
-    val sync      = new AnyRef
 
-    println("_" * 100)
-
-    /*val rendering =*/ universe.cursor.step { implicit tx =>
-      val cueStart    = AudioCue(fStart, specStart, offset = 0L, gain = 1.0)
+    ws.cursor.step { implicit tx =>
+      val cueStart = AudioCue(fStart, specStart, offset = 0L, gain = 1.0)
       val cueStartObj = AudioCue.Obj.newConst[S](cueStart)
 
       val n = Negatum[S](cueStartObj)
+      n.name = "Negatum"
+      ws.root.addLast(n)
+      tx.newHandle(n)
+    }
+  }
+
+  lazy val UGenExclude: Set[String] = Set(
+    "CuspL", "CuspN",
+    "FSinOsc",
+    "GbmanL", "GbmanN",
+    "HenonC", "HenonL", "HenonN",
+    "LatoocarfianC", "LatoocarfianL", "LatoocarfianN",
+    "LFCub", "LFGauss", "LFPar", "LFTri", "LFSaw",
+    "LinCongC", "LinCongL", "LinCongN",
+    "LorenzL",
+    "Pulse",
+    "QuadC", "QuadL", "QuadN",
+    "Saw", "SinOsc",
+    "StandardL", "StandardN",
+    "SyncSaw", "VarSaw",
+  )
+
+  lazy val UGenNames: Set[String] = UGens.map.keySet -- UGenExclude
+
+  def iterate[S <: Sys[S]](ws: Workspace[S], config: Config, nH: stm.Source[S#Tx, Negatum[S]], frame: Int,
+                           syncQuit: AnyRef)
+                          (implicit universe: Universe[S], system: S): Unit = {
+
+    val fStart    = config.formatTemplate(frame)
+    val specStart = AudioFile.readSpec(fStart)
+
+    println(s"Iteration $frame")
+    println("_" * 100)
+
+    def abort(tr: Try[Any]): Unit = {
+      println()
+      println(tr)
+      tr match {
+        case Failure(ex) =>
+          ex.printStackTrace()
+        case _ =>
+      }
+      ws.close()
+      syncQuit.synchronized {
+        syncQuit.notifyAll()
+      }
+    }
+
+    import Mellite.executionContext
+    import universe.cursor
+
+    /*val rendering =*/ cursor.step { implicit tx =>
+      val cueValue  = AudioCue(fStart, specStart, offset = 0L, gain = 1.0)
+      val cueObj    = AudioCue.Obj.newConst[S](cueValue)
+
+      val n = nH()
+      n.template() = cueObj
+
       val generation  = Negatum.Generation(
-        population      = 10, // 1000,
+        population      = config.genPop, // 1000,
         probConst       = 0.5,
         minVertices     = 32,
         maxVertices     = 128,
-        probDefault     = 0.05,
-        allowedUGens    = Set.empty, // XXX TODO
+        probDefault     = config.probDefault, // 0.05,
+        allowedUGens    = UGenNames,
       )
       val evaluation  = Negatum.Evaluation(
         minFreq         = 100,
@@ -96,7 +239,7 @@ object RunNegatum {
         elitism         = 3,
         minMut          = 2,
         maxMut          = 5,
-        probMut         = 0.75,
+        probMut         = config.probMut,
         golem           = 15
       )
       val nCfg        = Negatum.Config(
@@ -107,8 +250,7 @@ object RunNegatum {
         breeding        = breeding
       )
 
-      val r   = n.run(nCfg)
-      val nH  = tx.newHandle(n)
+      val r = n.run(nCfg)
 
       var progressLast = 0
       r.reactNow { implicit tx => {
@@ -124,14 +266,101 @@ object RunNegatum {
         case Rendering.Completed(tr) =>
           if (tr.isSuccess) {
             val n = nH()
-            // println(s"\nPopulation.size: ${n.population.size}")
-          }
 
-          tx.afterCommit {
-            println()
-            println(tr)
-            sync.synchronized {
-              sync.notifyAll()
+            type Candidate  = (stm.Source[S#Tx, Proc[S]], SynthGraph, Boolean)
+            type Candidates = Vec[Candidate]
+
+            val cand: Candidates =
+              n.population.iterator.collect {
+                case p: Proc[S] if p.attr.$[DoubleObj](Negatum.attrFitness).exists(_.value > 0.0) =>
+                  (tx.newHandle(p), p.graph.value, false)
+              } .toIndexedSeq
+
+            tx.afterCommit {
+              println(s"\nOptimizing ${cand.size} candidates...")
+
+              def loop(rem: Candidates, res: Candidates): Future[Candidates] = rem match {
+                case head +: tail =>
+                  // we cannot expand things, because we replace the individual in the Negatum object,
+                  // and otherwise next iteration wouldn't work
+                  val oCfg = Optimize.Config(
+                    graph         = head._2,
+                    sampleRate    = specStart.sampleRate,
+                    analysisDur   = specStart.numFrames / specStart.sampleRate,
+                    blockSize     = 64,
+                    expandProtect = false, // true,
+                    expandIO      = false, // true,
+                  )
+                  val o = Optimize(oCfg)
+                  o.start()
+                  val ot: Future[Candidate] = o.transform {
+                    case Success(oRes) =>
+                      Success((head._1, oRes.graph, true): Candidate)
+                    case Failure(_) =>
+                      Success(head)
+                  }
+
+                  ot.flatMap { out =>
+                    loop(tail, res :+ out)
+                  }
+
+                case _ => Future.successful(res)
+              }
+
+              def applyOpt(vec: Candidates): Unit = {
+                val nextFrame = frame + 1
+
+                var problems = 0
+                cursor.step { implicit tx =>
+                  val f = Folder[S]()
+                  f.name = s"It $frame"
+                  vec.foreach { case (pH, g, replace) =>
+                    val p       = pH()
+                    if (replace && (frame % config.optimizeInterval == 0)) p.graph() = g
+                    val pC      = Proc[S]()
+                    pC.graph()  = g
+                    pC.name     = p.name
+                    p.attr.get(Negatum.attrFitness).foreach { fit =>
+                      pC.attr.put(Negatum.attrFitness, fit)
+                    }
+                    if (!replace) {
+                      // keep track of the problems
+                      pC.attr.put("optimized", BooleanObj.newConst(false))
+                      problems +=1
+                    }
+                    f.addLast(p)
+                  }
+                  ws.root.addLast(f)
+                  val n = nH()
+                  n.attr.put("frame", IntObj.newConst(nextFrame))
+                }
+                if (problems > 0) {
+                  println(s"- There were problems ($problems) with optimization")
+                }
+
+                if (nextFrame < config.endFrame) {
+                  iterate(ws, config, nH, frame = nextFrame, syncQuit = syncQuit)
+                } else {
+                  abort(tr)
+                }
+              }
+
+              val futOpt = loop(cand, Vector.empty)
+              futOpt.onComplete {
+                case Success(vec) =>
+                  applyOpt(vec)
+
+//                case fail @ Failure(_: MkSynthGraph.Incomplete) =>
+//                  println(fail)
+//                  applyOpt(cand, replace = false)
+
+                case tr => abort(tr)
+              }
+            }
+
+          } else {
+            tx.afterCommit {
+              abort(tr)
             }
           }
 
@@ -141,16 +370,20 @@ object RunNegatum {
 
       () // r
     }
+  }
 
-    new Thread {
+  private def waitForQuit(): AnyRef = {
+    val syncQuit = new AnyRef
+    new Thread("wait-for-termination") {
       override def run(): Unit =
-        sync.synchronized {
-          sync.wait()
+        syncQuit.synchronized {
+          syncQuit.wait()
           println("Done.")
           sys.exit()
         }
 
       start()
     }
+    syncQuit
   }
 }

@@ -20,3 +20,17 @@ If have extracted the Mellite _zip_ download, you should be able to launch Melli
 Once the menu appears, you can then open the workspace that you have downloaded separately (extract the _.mllt.zip_ archive to obtain 
 the _.mllt_ directory/database). Select _File > Open_ and go into the parent directory of the _.mllt_ workspace, here select the _.mllt_
 directory (do not double click), then select the _Open_ button.
+
+## Running Negatum
+
+Build using `sbt assembly`.
+
+When using `run.sh`, a RAM disk must have been created:
+
+    mkdir /tmp/ramdisk
+    chmod 777 /tmp/ramdisk
+    sudo mount -t tmpfs -o size=256m myramdisk /tmp/ramdisk
+
+Options are something like
+
+    --workspace /data/projects/Infiltration/workspaces/NegatumTrunk11.mllt --template /data/projects/Infiltration/audio_work/trunk11/trunk_47e8301c-%d-hilbert-curve.aif --end-frame 500 --gen-population 800
