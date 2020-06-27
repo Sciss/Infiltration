@@ -32,11 +32,16 @@ import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
 
 object RunNegatum {
-  final case class Config(workspace: File, template: File, startFrame: Int, endFrame: Int,
+  final case class Config(workspace       : File,
+                          template        : File,
+                          startFrame      : Int,
+                          endFrame        : Int,
                           optimizeInterval: Int,
-                          genPop: Int,
-                          probMut: Double,
-                          probDefault: Double) {
+                          genPop          : Int,
+                          probMut         : Double,
+                          probDefault     : Double,
+                          evalTimeout     : Double,
+                         ) {
     def formatTemplate(frame: Int): File = {
       template.replaceName(template.name.format(frame))
     }
@@ -72,6 +77,10 @@ object RunNegatum {
         validate = i => i >= 0.0 && i <= 1.0, default = Some(0.001),
         descr = "Probability of using default parameters (0-1)"
       )
+      val evalTimeout: Opt[Double] = opt("eval-timeout",
+        validate = _ > 0.0, default = Some(20.0),
+        descr = "Time-out in seconds for sound evaluation"
+      )
 
       verify()
       val config: Config = Config(
@@ -83,6 +92,7 @@ object RunNegatum {
         genPop            = genPop(),
         probMut           = probMut(),
         probDefault       = probDefault(),
+        evalTimeout       = evalTimeout(),
       )
     }
 
@@ -225,13 +235,14 @@ object RunNegatum {
         probDefault     = config.probDefault, // 0.05,
         allowedUGens    = UGenNames,
       )
-      val evaluation  = Negatum.Evaluation(
+      val evaluation  = Negatum.Evaluation.apply2(
         minFreq         = 100,
         maxFreq         = 16000,
         numMel          = 42,
         numMFCC         = 32,
         maxBoost        = 10.0,
         timeWeight      = 0.5,
+        timeOut         = config.evalTimeout,
       )
       val penalty     = Negatum.Penalty()
       val breeding    = Negatum.Breeding(
@@ -240,14 +251,14 @@ object RunNegatum {
         minMut          = 2,
         maxMut          = 5,
         probMut         = config.probMut,
-        golem           = 15
+        golem           = 15,
       )
       val nCfg        = Negatum.Config(
         seed            = System.currentTimeMillis(),
         generation      = generation,
         evaluation      = evaluation,
         penalty         = penalty,
-        breeding        = breeding
+        breeding        = breeding,
       )
 
       val r = n.run(nCfg)

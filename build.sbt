@@ -15,7 +15,7 @@ lazy val deps = new {
   val fscape      = "2.36.1"
   val lucre       = "3.17.1"
   val melliteApp  = "2.48.0"
-  val negatum     = "0.15.1"
+  val negatum     = "0.15.2-SNAPSHOT"
   val submin      = "0.3.4"
 //  val wolkenpumpe = "2.40.0"
 }
