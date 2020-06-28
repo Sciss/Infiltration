@@ -19,7 +19,7 @@ import de.sciss.lucre.stm
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.stm.{Folder, Sys}
 import de.sciss.mellite.{Application, Mellite}
-import de.sciss.negatum.impl.{ParamRanges, UGens}
+import de.sciss.negatum.impl.{NegatumRenderingImpl, ParamRanges, UGens}
 import de.sciss.negatum.{Negatum, Optimize, Rendering}
 import de.sciss.synth.SynthGraph
 import de.sciss.synth.io.AudioFile
@@ -37,10 +37,12 @@ object RunNegatum {
                           startFrame      : Int,
                           endFrame        : Int,
                           optimizeInterval: Int,
+                          optimizeResults : Boolean,
                           genPop          : Int,
                           probMut         : Double,
                           probDefault     : Double,
                           evalTimeout     : Double,
+                          storeBadDefs    : Boolean,
                          ) {
     def formatTemplate(frame: Int): File = {
       template.replaceName(template.name.format(frame))
@@ -81,6 +83,12 @@ object RunNegatum {
         validate = _ > 0.0, default = Some(20.0),
         descr = "Time-out in seconds for sound evaluation"
       )
+      val optimizeResults: Opt[Boolean] = toggle("optimize-results",
+        descrYes = "Optimize results before storing", default = Some(false),
+      )
+      val storeBadDefs: Opt[Boolean] = toggle("store-bad-definitions",
+        descrYes = "Store bad synth definitions in user home", default = Some(false),
+      )
 
       verify()
       val config: Config = Config(
@@ -93,16 +101,20 @@ object RunNegatum {
         probMut           = probMut(),
         probDefault       = probDefault(),
         evalTimeout       = evalTimeout(),
+        optimizeResults   = optimizeResults(),
+        storeBadDefs      = storeBadDefs(),
       )
     }
 
-    Application.init(Mellite)
-    Mellite.initTypes()
-
-    type S = Durable
-
     val config  = p.config
     val wsDir   = config.workspace
+
+    Application.init(Mellite)
+    Mellite.initTypes()
+    NegatumRenderingImpl.REPORT_TIME_OUT        = true
+    NegatumRenderingImpl.STORE_BAD_DEFINITIONS  = config.storeBadDefs
+
+    type S = Durable
 
     val (ws: Workspace[S], frame: Int, nH: stm.Source[S#Tx, Negatum[S]]) = if (wsDir.exists()) {
       val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = false)
@@ -288,7 +300,8 @@ object RunNegatum {
               } .toIndexedSeq
 
             tx.afterCommit {
-              println(s"\nOptimizing ${cand.size} candidates...")
+              val optPop = frame % config.optimizeInterval == 0
+              val runOpt = config.optimizeResults || optPop
 
               def loop(rem: Candidates, res: Candidates): Future[Candidates] = rem match {
                 case head +: tail =>
@@ -327,19 +340,19 @@ object RunNegatum {
                   f.name = s"It $frame"
                   vec.foreach { case (pH, g, replace) =>
                     val p       = pH()
-                    if (replace && (frame % config.optimizeInterval == 0)) p.graph() = g
+                    if (replace && optPop) p.graph() = g
                     val pC      = Proc[S]()
                     pC.graph()  = g
                     pC.name     = p.name
                     p.attr.get(Negatum.attrFitness).foreach { fit =>
                       pC.attr.put(Negatum.attrFitness, fit)
                     }
-                    if (!replace) {
+                    pC.attr.put("optimized", BooleanObj.newConst(replace))
+                    if (!replace && config.optimizeResults) {
                       // keep track of the problems
-                      pC.attr.put("optimized", BooleanObj.newConst(false))
                       problems +=1
                     }
-                    f.addLast(p)
+                    f.addLast(pC)
                   }
                   ws.root.addLast(f)
                   val n = nH()
@@ -356,16 +369,23 @@ object RunNegatum {
                 }
               }
 
-              val futOpt = loop(cand, Vector.empty)
-              futOpt.onComplete {
-                case Success(vec) =>
-                  applyOpt(vec)
+              println()
+              if (runOpt) {
+                println(s"Optimizing ${cand.size} candidates...")
+                val futOpt = loop(cand, Vector.empty)
+                futOpt.onComplete {
+                  case Success(vec) =>
+                    applyOpt(vec)
 
-//                case fail @ Failure(_: MkSynthGraph.Incomplete) =>
-//                  println(fail)
-//                  applyOpt(cand, replace = false)
+                  //                case fail @ Failure(_: MkSynthGraph.Incomplete) =>
+                  //                  println(fail)
+                  //                  applyOpt(cand, replace = false)
 
-                case tr => abort(tr)
+                  case tr => abort(tr)
+                }
+              } else {
+                println(s"Found ${cand.size} candidates.")
+                applyOpt(cand)
               }
             }
 

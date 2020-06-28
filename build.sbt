@@ -12,11 +12,12 @@ lazy val commonSettings = Seq(
 )
 
 lazy val deps = new {
-  val fscape      = "2.36.1"
-  val lucre       = "3.17.1"
-  val melliteApp  = "2.48.0"
-  val negatum     = "0.15.2-SNAPSHOT"
-  val submin      = "0.3.4"
+  val fscape          = "2.36.1"
+  val lucre           = "3.17.1"
+  val melliteApp      = "2.48.0"
+  val negatum         = "0.15.2"
+  val soundProcesses  = "3.35.6"
+  val submin          = "0.3.4"
 //  val wolkenpumpe = "2.40.0"
 }
 
@@ -30,6 +31,7 @@ lazy val root = project.in(file("."))
       "de.sciss" %% "lucre-expr"    % deps.lucre,
       "de.sciss" %% "mellite-app"   % deps.melliteApp,
       "de.sciss" %% "negatum-core"  % deps.negatum,
+      "de.sciss" %% "soundprocesses-core"  % deps.soundProcesses,
       "de.sciss" %  "submin"        % deps.submin,
 //      "de.sciss" %% "wolkenpumpe"   % deps.wolkenpumpe,
     ),
