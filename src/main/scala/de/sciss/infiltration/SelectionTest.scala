@@ -51,6 +51,8 @@ object SelectionTest {
     testCorr()
   }
 
+  def any2stringadd(in: Any): Any = ()
+
   // N.B. we have implemented this directly as a workspace now
   def testCorr(): Unit = {
     val bncFiles = (audioDir / "def_bnc").children(_.extL == "aif").sorted
