@@ -14,8 +14,11 @@
 package de.sciss.infiltration
 
 import de.sciss.file._
+import de.sciss.fscape.Graph
+import de.sciss.fscape.lucre.FScape
 import de.sciss.infiltration.SelectionTest.{audioDir, trunkIdMap}
 import de.sciss.kollflitz.Vec
+import de.sciss.lucre.artifact.{Artifact, ArtifactLocation}
 import de.sciss.lucre.expr.{DoubleObj, IntObj}
 import de.sciss.lucre.synth.InMemory
 import de.sciss.mellite.{Application, Mellite, Prefs}
@@ -176,14 +179,57 @@ object Parametrize {
 
     import de.sciss.mellite.Mellite.executionContext
 
-    val bncF = file("/data/temp/_killme.aif")
+//    val bncF = file("/data/temp/_killme.aif")
+    val bncF = File.createTemp(suffix = ".aif")
 
     val futBnc = bounceVariants(graph, values = values, audioF = bncF, duration = tempSpec.numFrames/tempSpec.sampleRate,
       sampleRate = tempSpec.sampleRate.toInt)
     println("Making test bounce...")
-    Await.result(futBnc, Duration.Inf)
+    val futCorr = futBnc.map { _ =>
+      println("Correlating...")
+
+      type I  = InMemory
+      implicit val iCursor: I = inMemory
+
+      val r = inMemory.step { implicit tx =>
+        val f = FScape[I]()
+        f.graph() = gCorr
+        val bncLoc = ArtifactLocation.newConst(bncF.parent)
+        f.attr.put("in", Artifact(bncLoc, bncF))
+        implicit val u: Universe[I] = Universe.dummy[I]
+        f.run()
+      }
+      r.control.status
+    }
+    Await.result(futCorr, Duration.Inf)
     println("Done.")
-    sys.exit()
+  }
+
+  def any2stringadd(in: Any): Any = ()
+
+  def gCorr: Graph = Graph {
+    import de.sciss.fscape.graph.{AudioFileIn => _, _}
+    import de.sciss.fscape.lucre.graph._
+    //val numFrames = 262144
+    val inAll     = AudioFileIn("in")
+    val numFrames = inAll.numFrames
+    val inRef     = inAll.out(0)
+    val inRefRvs  = ReverseWindow(inRef, numFrames)
+    val convSize  = numFrames + numFrames - 1
+    val fftSize   = convSize.nextPowerOfTwo // numFrames << 1
+    //fftSize.poll("fftSize")
+    val fftAll    = Real1FFT(inAll    , size = fftSize, mode = 1)
+    val fftRef    = Real1FFT(inRefRvs , size = fftSize, mode = 1) * fftSize
+    val eAll      = RunningSum(inAll.squared).last
+    val eRef      = RunningSum(inRef.squared).last
+    val prod      = fftAll.complex * fftRef
+    val corr      = Real1IFFT(prod, fftSize, mode = 1)
+    //Plot1D(corr, convSize min 1024, "corr")
+    val corrMax0  = RunningMax(corr.abs).last
+    val corrMax = corrMax0 / (eAll + eRef)
+    corrMax.ampDb.poll("corrMax [dB]")
+    //e1.poll("e1")
+    //e2.poll("e2")
   }
 
   def run(): Unit = {

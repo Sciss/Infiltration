@@ -66,7 +66,7 @@ object SelectionTest {
         val in1       = AudioFileIn("in-1")//.take(numFrames)
         val in2       = AudioFileIn("in-2")//.take(numFrames)
         val in2Rvs    = ReverseWindow(in2, in2.numFrames)
-        val convSize  = in1.numFrames + in2.numFrames - 2
+        val convSize  = in1.numFrames + in2.numFrames - 1
         val fftSize   = convSize.nextPowerOfTwo // numFrames << 1
         //fftSize.poll("fftSize")
         val fft1      = Real1FFT(in1    , size = fftSize, mode = 1) * fftSize
