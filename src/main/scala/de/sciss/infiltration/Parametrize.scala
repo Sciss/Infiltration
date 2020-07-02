@@ -13,6 +13,8 @@
 
 package de.sciss.infiltration
 
+import java.awt.EventQueue
+
 import de.sciss.file._
 import de.sciss.fscape.Graph
 import de.sciss.fscape.lucre.FScape
@@ -23,20 +25,22 @@ import de.sciss.lucre.expr.{DoubleObj, IntObj}
 import de.sciss.lucre.synth.InMemory
 import de.sciss.mellite.{Application, Mellite, Prefs}
 import de.sciss.negatum.Negatum.SynthGraphT
-import de.sciss.negatum.Vertex
-import de.sciss.negatum.impl.{Chromosome, MkSynthGraph, MkTopology, ParamRanges}
+import de.sciss.negatum.{Edge, Vertex}
+import de.sciss.negatum.impl.{Chromosome, MkSynthGraph, MkTopology, ParamRanges, UGens}
 import de.sciss.numbers
 import de.sciss.processor.Processor
 import de.sciss.span.Span
 import de.sciss.synth.io.AudioFile
 import de.sciss.synth.proc.graph.Attribute
-import de.sciss.synth.proc.{Bounce, Proc, TimeRef, Universe}
-import de.sciss.synth.ugen.RandID
+import de.sciss.synth.proc.impl.MkSynthGraphSource
+import de.sciss.synth.proc.{Bounce, Proc, Runner, TimeRef, Universe}
+import de.sciss.synth.ugen.{BinaryOpUGen, RandID}
 import de.sciss.synth.{GE, SynthGraph, UGenSpec, audio}
 
-import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.swing.Swing
+import scala.util.control.NonFatal
+import scala.util.{Failure, Success}
 
 object Parametrize {
   def main(args: Array[String]): Unit = {
@@ -44,6 +48,8 @@ object Parametrize {
     Mellite.initTypes()
     Swing.onEDT(run())
   }
+
+  val VERBOSE = false
 
   final case class ControlVertex(name: String, values: Vec[Float]) extends Vertex.UGen {
     val info: UGenSpec = UGenSpec(
@@ -164,7 +170,25 @@ object Parametrize {
 
   final case class Use(vc: Vertex.Constant, min: Double, max: Double)
 
-  def runOne(topIn: SynthGraphT, use: Use): Unit = {
+//  final case class Corr(value: Double, amp: Double)
+//  final case class RunOne(testValues: Vec[Double], corr: Vec[Corr])
+  final case class RunOne(min: Double, max: Double, corr: Double)
+
+  def futEDT[A](body: => Future[A]): Future[A] =
+    if (EventQueue.isDispatchThread) body else {
+      val p = Promise[A]()
+      Swing.onEDT {
+        try {
+          p.completeWith(body)
+        } catch {
+          case NonFatal(ex) =>
+            p.tryFailure(ex)
+        }
+      }
+      p.future
+    }
+
+  def runOne(topIn: SynthGraphT, use: Use): Future[Option[RunOne]] = {
     val Use(vc, min, max) = use // constWithUse(0) // .head
     val values  = vc.f.toDouble +: mkTestValues(min = min, max = max)
     val vCtl    = ControlVertex("value", Vector(vc.f))
@@ -180,13 +204,20 @@ object Parametrize {
     import de.sciss.mellite.Mellite.executionContext
 
 //    val bncF = file("/data/temp/_killme.aif")
-    val bncF = File.createTemp(suffix = ".aif")
+    val bncF  = File.createTemp(suffix = ".aif")
+    val corrF = File.createTemp(suffix = ".aif")
+//    println(corrF)
 
     val futBnc = bounceVariants(graph, values = values, audioF = bncF, duration = tempSpec.numFrames/tempSpec.sampleRate,
       sampleRate = tempSpec.sampleRate.toInt)
-    println("Making test bounce...")
-    val futCorr = futBnc.map { _ =>
-      println("Correlating...")
+    if (VERBOSE) {
+      println("Making test bounce...")
+    }
+    val futCorr = futBnc.flatMap { _ =>
+      if (VERBOSE) {
+        println("Correlating...")
+      }
+//      val pReallyDone = Promise[Unit]()
 
       type I  = InMemory
       implicit val iCursor: I = inMemory
@@ -194,21 +225,88 @@ object Parametrize {
       val r = inMemory.step { implicit tx =>
         val f = FScape[I]()
         f.graph() = gCorr
-        val bncLoc = ArtifactLocation.newConst(bncF.parent)
-        f.attr.put("in", Artifact(bncLoc, bncF))
+        val bncLoc  = ArtifactLocation.newConst(bncF  .parent)
+        val corrLoc = ArtifactLocation.newConst(corrF .parent)
+        f.attr.put("in" , Artifact(bncLoc , bncF  ))
+        f.attr.put("out", Artifact(corrLoc, corrF ))
         implicit val u: Universe[I] = Universe.dummy[I]
-        f.run()
+//        implicit val tgt: ITargets[I] = ITargets.apply
+//        import u.workspace
+//        implicit val undo: UndoManager[I] = UndoManager.dummy[I]
+//        implicit val ctx: Context[I] = Context[I]()
+//        val _runMap = ISeq.tabulate(values.size) { ch =>
+//          val vr = Var(-1.0)
+//          val pair: Ex[(String, Double)] = (s"out-$ch", vr)
+//          val _pairI = pair.expand[I]
+//          _pairI
+//        }
+        val _r = f.run(attr =
+          Runner.emptyAttr // new IExprAsRunnerMap[I](_runMap, tx)
+        )
+//        _r.reactNow { implicit tx => state =>
+//          if (state.isComplete) {
+//            tx.afterCommit {
+//              println("Aqui")
+//              pReallyDone.success(())
+//            }
+////            println(s"RESULT: ${_runMap.map(_.value._2)}")
+//          }
+//        }
+
+        _r
       }
-      r.control.status
+       r.control.status
+//      pReallyDone.future
     }
-    Await.result(futCorr, Duration.Inf)
-    println("Done.")
+//    Await.result(futCorr, Duration.Inf)
+//    println("Done.")
+//    while (corrF.length() == 0L) Thread.sleep(100)
+    futCorr.map { _  =>
+      val afCorr = AudioFile.openRead(corrF)
+      try {
+        val b = afCorr.buffer(2)
+        afCorr.read(b)
+        val bt      = b.transpose
+        val dCorr   = bt(0).iterator.map(_.toDouble).toVector.tail
+        val dEn     = bt(1).iterator.map(_.toDouble).toVector.tail
+
+        //        println(data)
+//        RunOne(values, (dCorr zip dEn).map(tup => Corr(tup._1, tup._2)))
+        val idxStart = dEn.indexWhere    (_ > 0.01)  // ca. -40 dB
+        val idxStop  = dEn.lastIndexWhere(_ > 0.01) + 1
+        if (idxStart >= 0 && idxStop > idxStart) {
+          val minCorr     = dCorr.slice(idxStart, idxStop).min
+          if (minCorr < 0.7) {
+            val valueRange  = values.slice(idxStart, idxStop)
+            val valueGP     = use.vc.f.toDouble
+            val valueMin    = math.min(valueGP, valueRange.head)
+            val valueMax    = math.max(valueGP, valueRange.last)
+            Some(RunOne(min = valueMin, max = valueMax, corr = minCorr))
+
+          } else {
+            None
+          }
+        } else {
+          None
+        }
+
+      } finally {
+        afCorr.cleanUp()
+        corrF.delete()
+      }
+    }
   }
 
   def any2stringadd(in: Any): Any = ()
 
-  def gCorr: Graph = Graph {
-    import de.sciss.fscape.graph.{AudioFileIn => _, _}
+  def sequence[A, B](xs: Seq[A])(f: A => Future[B])(implicit exec: ExecutionContext): Future[Seq[B]] =
+    xs.foldLeft(Future.successful(Vector.empty[B])) {
+      case (acc, x) =>
+        acc.flatMap(prev => f(x).map(prev :+ _))
+    }
+
+  lazy val gCorr: Graph = Graph {
+    import de.sciss.fscape.graph.{AudioFileIn => _, AudioFileOut => _, _}
     import de.sciss.fscape.lucre.graph._
     //val numFrames = 262144
     val inAll     = AudioFileIn("in")
@@ -226,20 +324,27 @@ object Parametrize {
     val corr      = Real1IFFT(prod, fftSize, mode = 1)
     //Plot1D(corr, convSize min 1024, "corr")
     val corrMax0  = RunningMax(corr.abs).last
-    val corrMax = corrMax0 / (eAll + eRef)
-    corrMax.ampDb.poll("corrMax [dB]")
+    val corrMax   = corrMax0 / (eAll + eRef) ++ (eAll / eRef)
+    AudioFileOut("out", corrMax)
+//    MkDouble("out", corrMax)
+
+//    corrMax.ampDb.poll("corrMax [dB]")
     //e1.poll("e1")
     //e2.poll("e2")
   }
 
   def run(): Unit = {
+    val t0 = System.currentTimeMillis()
+
     val _gIn      = gIn2
     val topIn     = MkTopology(_gIn)
     val numConst  = topIn.vertices.count(_.isConstant)
     val constants = topIn.vertices.collect {
       case vc: Vertex.Constant => vc
     }
-    println(s"Num.constants $numConst")
+    if (VERBOSE) {
+      println(s"Num.constants $numConst")
+    }
 
     val constWithUse: Vec[Use] = constants.map { vc =>
       val vNameOut: List[(String, String)] = Chromosome.getArgUsages(topIn, vc).flatMap { edge =>
@@ -277,8 +382,10 @@ object Parametrize {
 //      uses.isEmpty || uses.forall(u => u._2.exists(_.dynamic))
 //    }
 
-    println(constants.map(_.f))
-    println(constWithUse.mkString("\n"))
+    if (VERBOSE) {
+      println(constants.map(_.f))
+      println(constWithUse.mkString("\n"))
+    }
 
     /*
 
@@ -303,8 +410,90 @@ object Parametrize {
 
     */
 
-    runOne(topIn, constWithUse(0))
+    import de.sciss.mellite.Mellite.executionContext
 
+//    val use     = constWithUse(10)
+//    val futOne  = runOne(topIn, use)
+//    futOne.foreach { opt =>
+//      println(opt)
+//    }
+
+    val futCorr = sequence(constWithUse) { use =>
+      futEDT {
+        runOne(topIn, use)
+      }
+    }
+
+    futCorr.onComplete { tr =>
+      val t1 = System.currentTimeMillis()
+      println(s"Done (took ${(t1 - t0)/1000}s). Ok? ${tr.isSuccess}")
+      tr match {
+        case Success(seq) =>
+          if (VERBOSE) {
+            println(seq.mkString("\n"))
+          }
+          val hasRun = (seq zip constWithUse).collect {
+            case (Some(run), vc) => (run, vc)
+          }
+          val sortRun = hasRun.sortBy(_._1.corr).take(5)
+          println("\n--SEL---\n")
+          println(sortRun.mkString("\n"))
+
+          val topPatch = sortRun.zipWithIndex.foldLeft(topIn) { case (topAcc, ((run, use), idx)) =>
+            import use.vc
+            import numbers.Implicits._
+            val v0      = vc.f.linLin(run.min, run.max, 0.0, 1.0)
+            val vCtl    = ControlVertex(s"ctl_$idx", Vector(v0.toFloat))
+            val nMul    = s"Bin_${BinaryOpUGen.Times.id}"
+            val nAdd    = s"Bin_${BinaryOpUGen.Plus .id}"
+            val sMul    = UGens.map(nMul)
+            val sAdd    = UGens.map(nAdd)
+            val vMul    = Vertex.UGen(sMul)
+            val vAdd    = Vertex.UGen(sAdd)
+            val vcMul   = Vertex.Constant((run.max - run.min).toFloat)
+            val vcAdd   = Vertex.Constant( run.min.toFloat)
+            var topOut  = topAcc
+            topOut      = topOut.addVertex(vCtl)
+            topOut      = topOut.addVertex(vMul)
+            topOut      = topOut.addVertex(vAdd)
+            topOut      = topOut.addEdge(Edge(vMul, vCtl  , "a")).get._1
+            topOut      = topOut.addVertex(vcMul)
+            topOut      = topOut.addEdge(Edge(vMul, vcMul , "b")).get._1
+            topOut      = topOut.addEdge(Edge(vAdd, vMul  , "a")).get._1
+            topOut      = topOut.addVertex(vcAdd)
+            topOut      = topOut.addEdge(Edge(vAdd, vcAdd , "b")).get._1
+            topOut      = Chromosome.replaceVertex(topOut, vOld = vc, vNew = vAdd)
+            topOut
+          }
+
+          val gPatch    = MkSynthGraph(topPatch)
+          val srcPatch  = MkSynthGraphSource(gPatch)
+          println()
+          println(srcPatch)
+
+        case Failure(ex) =>
+          println(ex)
+      }
+    }
+
+
+//      println(data.map { corr =>
+//        import numbers.Implicits._
+//        (corr.value.ampDb, corr.amp.ampDb)
+//      })
+//      val idxStart = data.indexWhere    (_.amp > 0.01)  // ca. -40 dB
+//      val idxStop  = data.lastIndexWhere(_.amp > 0.01) + 1
+//      if (idxStart >= 0 && idxStop > idxStart) {
+//        val minCorr     = data.slice(idxStart, idxStop).map(_.value).min
+//        val valueRange  = testValues.slice(idxStart, idxStop)
+//        val valueGP     = use.vc.f.toDouble
+//        val valueMin    = math.min(valueGP, valueRange.head)
+//        val valueMax    = math.max(valueGP, valueRange.last)
+//        import numbers.Implicits._
+//        println(f"VALUES (gp was ${use.vc.f}): $valueMin to $valueMax ; minCorr = ${minCorr.ampDb}%g dB")
+//      } else {
+//        println("Nope.")
+//      }
 
 //    val topOut = constants.zipWithIndex.foldLeft(topIn) { case (topAcc, (vc, idx)) =>
 //      val vCtl = ControlVertex(s"ctl_$idx", Vector(vc.f))
@@ -420,6 +609,5 @@ object Parametrize {
     val dC          = DC.ar(in)
     val mix         = Mix(Seq[GE](lFDNoise3_0, lFDNoise3_1, lFPulse, impulse, dC))
     NegatumOut(mix)
-
   }
 }
