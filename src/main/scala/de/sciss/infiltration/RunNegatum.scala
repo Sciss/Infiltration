@@ -147,6 +147,7 @@ object RunNegatum {
   }
 
   def tweak(): Unit = {
+    import de.sciss.negatum.impl.ParamRanges
     ParamRanges.map = ParamRanges.map.transform {
       case ("GVerb", info) =>
         info.copy(params = info.params ++ Map(

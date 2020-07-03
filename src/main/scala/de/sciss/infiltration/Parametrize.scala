@@ -46,7 +46,7 @@ object Parametrize {
   def main(args: Array[String]): Unit = {
     Application.init(Mellite)
     Mellite.initTypes()
-    Swing.onEDT(run())
+    Swing.onEDT(run(gIn9))
   }
 
   val VERBOSE = false
@@ -68,7 +68,7 @@ object Parametrize {
     def instantiate(ins: Vec[(AnyRef, Class[_])]): GE =
       Attribute.ar(name, values)
 
-    def copy(): Vertex = new ControlVertex(name = name, values = values)
+    def copy(): Vertex = ControlVertex(name = name, values = values)
   }
   
   def mkTestValues(min: Double, max: Double): Vec[Double] = {
@@ -190,9 +190,10 @@ object Parametrize {
 
   def runOne(topIn: SynthGraphT, use: Use): Future[Option[RunOne]] = {
     val Use(vc, min, max) = use // constWithUse(0) // .head
-    val values  = vc.f.toDouble +: mkTestValues(min = min, max = max)
-    val vCtl    = ControlVertex("value", Vector(vc.f))
-    val topTest = {
+    val testValues  = mkTestValues(min = min, max = max)
+    val values      = vc.f.toDouble +: testValues
+    val vCtl        = ControlVertex("value", Vector(vc.f))
+    val topTest     = {
       val t0 = topIn.addVertex(vCtl)
       Chromosome.replaceVertex(t0, vOld = vc, vNew = vCtl)
     }
@@ -277,10 +278,15 @@ object Parametrize {
         if (idxStart >= 0 && idxStop > idxStart) {
           val minCorr     = dCorr.slice(idxStart, idxStop).min
           if (minCorr < 0.7) {
-            val valueRange  = values.slice(idxStart, idxStop)
+            val valueRange  = testValues.slice(idxStart, idxStop)
             val valueGP     = use.vc.f.toDouble
             val valueMin    = math.min(valueGP, valueRange.head)
             val valueMax    = math.max(valueGP, valueRange.last)
+            if (valueMin == valueMax) {
+              println("Häh???? " + valueRange + "; " + valueGP.toString)
+            } else if (valueMin.isNaN || valueMax.isNaN) {
+              println("min " + valueMin.toString + "; max " + valueMax.toString)
+            }
             Some(RunOne(min = valueMin, max = valueMax, corr = minCorr))
 
           } else {
@@ -333,10 +339,9 @@ object Parametrize {
     //e2.poll("e2")
   }
 
-  def run(): Unit = {
+  def run(_gIn: SynthGraph): Unit = {
     val t0 = System.currentTimeMillis()
 
-    val _gIn      = gIn2
     val topIn     = MkTopology(_gIn)
     val numConst  = topIn.vertices.count(_.isConstant)
     val constants = topIn.vertices.collect {
@@ -527,7 +532,7 @@ object Parametrize {
     is used multiple times. We have to decide whether to split that vertex or not.
 
    */
-  val gIn1: SynthGraph = SynthGraph {
+  lazy val gIn1: SynthGraph = SynthGraph {
     import de.sciss.synth.GE
     import de.sciss.synth.ugen._
 
@@ -548,7 +553,7 @@ object Parametrize {
     NegatumOut(mix)
   }
 
-  val gIn2: SynthGraph = SynthGraph {
+  lazy val gIn2: SynthGraph = SynthGraph {
     import de.sciss.synth.GE
     import de.sciss.synth.ugen._
     val inf = Float.PositiveInfinity
@@ -577,6 +582,341 @@ object Parametrize {
       decayTime = 3917.4714)
     val dC          = DC.ar(0.48718068)
     val mix         = Mix(Seq[GE](delayN, integrator, times, allpassN, dC))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn3: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+
+    // negatum-d14aeb62-opt
+
+    NegatumIn()
+    val blip          = Blip.ar(freq = 10.0, numHarm = 1.0)
+    val min_0         = (0.010628436: GE) min blip
+    val lFPulse_0     = LFPulse.ar(freq = 3253.167, iphase = 0.0, width = 1.0)
+    val minus         = lFPulse_0 - -2.6010132
+    val freq_0        = Protect(lFPulse_0, -inf, inf, false)
+    val lFDClipNoise  = LFDClipNoise.ar(freq_0)
+    val in_0          = Protect(min_0, -inf, inf, true)
+    val twoPole       = TwoPole.ar(in_0, freq = 10.0, radius = 0.0070142653)
+    val impulse       = Impulse.ar(freq = 0.49309492, phase = 0.0)
+    val in_1          = Protect(impulse, -inf, inf, true)
+    val revTime       = Protect(minus, 0.0, 100.0, false)
+    val gVerb         = GVerb.ar(in_1, roomSize = 0.95, revTime = revTime, damping = 0.0070142653,
+      inputBW = 0.98530567, spread = 1.7910538, dryLevel = 0.0,
+      earlyRefLevel = 0.18113671, tailLevel = 5.238983, maxRoomSize = 0.95)
+    val lFPulse_1     = LFPulse.ar(freq = 20000.0, iphase = 0.0, width = 0.0067190463)
+    val lFDNoise1     = LFDNoise1.ar(0.49309492)
+    val min_1         = (0.0: GE) min twoPole
+    val in_2          = Protect(min_1, -inf, inf, true)
+    val rq            = Protect(0.01, 0.01, 100.0, false)
+    val bPF           = BPF.ar(in_2, freq = 10.0, rq = rq)
+    val dC            = DC.ar(-0.1571754)
+    val mix           = Mix(Seq[GE](lFDClipNoise, gVerb, lFPulse_1, lFDNoise1, bPF, dC))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn4: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+
+    // negatum-c999800-opt
+
+    NegatumIn()
+    val impulse     = Impulse.ar(freq = 3488.15, phase = 0.10654729)
+    val in_0        = Protect(impulse, -inf, inf, true)
+    val hPZ1        = HPZ1.ar(in_0)
+    val in_1        = Protect(hPZ1, -inf, inf, true)
+    val integrator  = Integrator.ar(in_1, coeff = 0.0068862666)
+    val min_0       = integrator min 0.38350186
+    val min_1       = min_0 min 0.0
+    val in_2        = Protect(hPZ1, -inf, inf, true)
+    val hPF         = HPF.ar(in_2, freq = 10.0)
+    val in_3        = Protect(min_0, -inf, inf, true)
+    val freqShift   = FreqShift.ar(in_3, freq = 0.6309788, phase = -89.7749)
+    val mix         = Mix(Seq[GE](min_1, hPF, freqShift))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn5: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+
+    // negatum-e4bd0161-opt
+
+    NegatumIn()
+    val lFDClipNoise  = LFDClipNoise.ar(1592712.5)
+    val decayTime     = (0.0: GE) min lFDClipNoise
+    val times_0       = decayTime * 5.0
+    val minus         = (0.0: GE) - decayTime
+    val in_0          = Protect(decayTime, -inf, inf, true)
+    val hPZ1          = HPZ1.ar(in_0)
+    val min_0         = decayTime min hPZ1
+    val times_1       = min_0 * 3.0
+    val absdif        = min_0 absDif lFDClipNoise
+    val in_1          = Protect(absdif, -inf, inf, true)
+    val combC         = CombC.ar(in_1, maxDelayTime = 0.0, delayTime = 0.0, decayTime = decayTime)
+    val in_2          = Protect(decayTime, -inf, inf, true)
+    val attack        = Protect(1.0E-6, 1.0E-6, 30.0, false)
+    val release       = Protect(combC, 1.0E-6, 30.0, false)
+    val decay2        = Decay2.ar(in_2, attack = attack, release = release)
+    val in_3          = Protect(decayTime, -inf, inf, true)
+    val hPZ2          = HPZ2.ar(in_3)
+    val in_4          = Protect(hPZ2, -inf, inf, true)
+    val delayC        = DelayC.ar(in_4, maxDelayTime = 0.0, delayTime = 0.0)
+    val min_1         = hPZ2 min minus
+    val in_5          = Protect(min_0, -inf, inf, true)
+    val freq_0        = Protect(min_0, -20000.0, 20000.0, false)
+    val phase         = Protect(decayTime, -inf, inf, false)
+    val in_6          = FreqShift.ar(in_5, freq = freq_0, phase = phase)
+    val leakDC        = LeakDC.ar(in_6, coeff = 0.8)
+    val in_7          = Protect(in_6, -inf, inf, true)
+    val pitchShift    = PitchShift.ar(in_7, winSize = 0.001, pitchRatio = 0.0, pitchDispersion = 1.0,
+      timeDispersion = 0.0)
+    val min_2         = pitchShift min delayC
+    val in_8          = Protect(min_2, -inf, inf, true)
+    val dur           = Protect(1.0E-6, 1.0E-6, 30.0, false)
+    val ramp          = Ramp.ar(in_8, dur = dur)
+    val mix           = Mix(Seq[GE](times_0, times_1, decay2, min_1, leakDC, ramp))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn6: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+    // negatum-92d59eaa-opt
+    NegatumIn()
+    val lFDClipNoise  = LFDClipNoise.ar(46551.492)
+    val min_0         = lFDClipNoise min 0.00605236
+    val min_1         = (46551.492: GE) min lFDClipNoise
+    val in_0          = Protect(min_1, -inf, inf, true)
+    val bPZ2          = BPZ2.ar(in_0)
+    val in_1          = Protect(min_1, -inf, inf, true)
+    val ramp_0        = Ramp.ar(in_1, dur = 30.0)
+    val min_2         = ramp_0 min min_1
+    val min_3         = min_2 min 0.00605236
+    val in_2          = Protect(min_3, -inf, inf, true)
+    val dur_0         = Protect(min_3, 1.0E-6, 30.0, false)
+    val ramp_1        = Ramp.ar(in_2, dur = dur_0)
+    val phase_0       = Protect(min_1, 0.0, 1.0, false)
+    val impulse       = Impulse.ar(freq = 0.1, phase = phase_0)
+    val in_3          = Protect(impulse, -inf, inf, true)
+    val delay1        = Delay1.ar(in_3)
+    val min_4         = impulse min ramp_1
+    val min_5         = (0.00605236: GE) min min_4
+    val min_6         = ramp_0 min ramp_1
+    val min_7         = (0.0: GE) min min_5
+    val min_8         = min_6 min min_2
+    val hypot         = min_8 hypot min_8
+    val in_4          = Protect(min_5, -inf, inf, true)
+    val freq_0        = Protect(ramp_0, -20000.0, 20000.0, false)
+    val phase_1       = Protect(hypot, -inf, inf, false)
+    val freqShift     = FreqShift.ar(in_4, freq = freq_0, phase = phase_1)
+    val wrap2         = min_5 wrap2 min_8
+    val ring2_0       = min_6 ring2 wrap2
+    val min_9         = ring2_0 min min_7
+    val in_5          = Protect(hypot, -inf, inf, true)
+    val attack        = Protect(wrap2, 1.0E-6, 30.0, false)
+    val release       = Protect(ring2_0, 1.0E-6, 30.0, false)
+    val decay2        = Decay2.ar(in_5, attack = attack, release = release)
+    val min_10        = ring2_0 min decay2
+    val min_11        = min_8 min min_10
+    val protect       = Protect(min_11, -20.0, 20.0, false)
+    val sinh          = protect.sinh
+    val times         = sinh * 2.0
+    val in_6          = Protect(min_6, -inf, inf, true)
+    val dur_1         = Protect(bPZ2, 1.0E-6, 30.0, false)
+    val ramp_2        = Ramp.ar(in_6, dur = dur_1)
+    val min_12        = ramp_2 min freqShift
+    val min_13        = hypot min ramp_2
+    val min_14        = min_13 min min_3
+    val min_15        = sinh min min_0
+    val in_7          = Protect(sinh, -inf, inf, true)
+    val bRZ2          = BRZ2.ar(in_7)
+    val min_16        = sinh min min_11
+    val ring2_1       = ramp_1 ring2 min_5
+    val min_17        = sinh min min_14
+    val mix           = Mix(Seq[GE](delay1, min_9, times, min_12, min_15, bRZ2, min_16, ring2_1, min_17))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn7: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+    // negatum-60d6a6830-opt
+    NegatumIn()
+    val coeff         = LFDClipNoise.ar(46551.492)
+    val sinh          = coeff.sinh
+    val freq_0        = Protect(sinh, 0.1, 20000.0, false)
+    val phase         = Protect(sinh, 0.0, 1.0, false)
+    val impulse       = Impulse.ar(freq = freq_0, phase = phase)
+    val min_0         = (0.003049939: GE) min impulse
+    val difsqr        = min_0 difSqr 0.0
+    val min_1         = coeff min 0.0
+    val min_2         = coeff min min_0
+    val in_0          = Protect(min_2, -inf, inf, true)
+    val oneZero       = OneZero.ar(in_0, coeff = coeff)
+    val min_3         = oneZero min 0.0
+    val min_4         = coeff min min_3
+    val blip          = Blip.ar(freq = 10.0, numHarm = 1.0)
+    val excess        = (0.0: GE) excess blip
+    val min_5         = (0.0: GE) min blip
+    val min_6         = min_4 min min_5
+    val freq_1        = excess > min_3
+    val lFDNoise1     = LFDNoise1.ar(freq_1)
+    val min_7         = lFDNoise1 min 0.0
+    val ring2         = min_5 ring2 min_7
+    val min_8         = ring2 min min_6
+    val min_9         = min_8 min coeff
+    val in_1          = Protect(min_6, -inf, inf, true)
+    val rq            = Protect(0.01, 0.01, 100.0, false)
+    val rLPF          = RLPF.ar(in_1, freq = 10.0, rq = rq)
+    val lFDClipNoise  = LFDClipNoise.ar(46551.492)
+    val dC            = DC.ar(1.0E-6)
+    val mix           = Mix(Seq[GE](difsqr, min_1, min_9, rLPF, lFDClipNoise, dC))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn8: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+    // negatum-90b3678f-opt
+    NegatumIn()
+    val freq_0    = Protect(287469.03, 0.01, 20000.0, false)
+    val lFPulse   = LFPulse.ar(freq = freq_0, iphase = 0.00605236, width = 1.0)
+    val in_0      = Protect(lFPulse, -inf, inf, true)
+    val hPZ2_0    = HPZ2.ar(in_0)
+    val min_0     = (0.00605236: GE) min hPZ2_0
+    val cos       = min_0.cos
+    val phase     = Protect(min_0, 0.0, 1.0, false)
+    val impulse   = Impulse.ar(freq = 0.1, phase = phase)
+    val in_1      = Protect(hPZ2_0, -inf, inf, true)
+    val hPZ2_1    = HPZ2.ar(in_1)
+    val min_1     = hPZ2_1 min impulse
+    val in_2      = Protect(min_0, -inf, inf, true)
+    val lPZ1      = LPZ1.ar(in_2)
+    val gt        = lPZ1 > min_1
+    val in_3      = min_0 min 0.0
+    val decayTime = in_3 min lPZ1
+    val times     = decayTime * 2.0
+    val in_4      = Protect(impulse, -inf, inf, true)
+    val time_0    = Protect(impulse, 1.0E-6, 30.0, false)
+    val lag       = Lag.ar(in_4, time = time_0)
+    val in_5      = Protect(in_3, -inf, inf, true)
+    val time_1    = Protect(lag, 1.0E-6, 30.0, false)
+    val lag2_0    = Lag2.ar(in_5, time = time_1)
+    val in_6      = Protect(impulse, -inf, inf, true)
+    val time_2    = Protect(gt, 1.0E-6, 30.0, false)
+    val lag2_1    = Lag2.ar(in_6, time = time_2)
+    val in_7      = Protect(min_0, -inf, inf, true)
+    val freq_1    = Protect(decayTime, -20000.0, 20000.0, false)
+    val in_8      = FreqShift.ar(in_7, freq = freq_1, phase = 0.0)
+    val min_2     = decayTime min lag
+    val min_3     = in_8 min min_2
+    val in_9      = Protect(lag2_1, -inf, inf, true)
+    val allpassL  = AllpassL.ar(in_9, maxDelayTime = 0.0, delayTime = 0.0, decayTime = decayTime)
+    val leakDC_0  = LeakDC.ar(in_8, coeff = 0.8)
+    val min_4     = min_3 min leakDC_0
+    val leakDC_1  = LeakDC.ar(in_3, coeff = 0.8)
+    val hypot     = min_2 hypot 0.0
+    val mix       = Mix(Seq[GE](cos, times, lag2_0, allpassL, min_4, leakDC_1, hypot))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn9: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+    // negatum-f8f750c2-opt
+    NegatumIn()
+    val decayTime_0     = Impulse.ar(freq = 60.0, phase = 1.0)
+    val in_0            = Protect(decayTime_0, -inf, inf, true)
+    val lPZ1            = LPZ1.ar(in_0)
+    val atan2           = (36.82512: GE) atan2 decayTime_0
+    val in_1            = Protect(decayTime_0, -inf, inf, true)
+    val dur_0           = Protect(decayTime_0, 1.0E-6, 30.0, false)
+    val ramp_0          = Ramp.ar(in_1, dur = dur_0)
+    val in_2            = Protect(atan2, -inf, inf, true)
+    val bPZ2_0          = BPZ2.ar(in_2)
+    val min_0           = bPZ2_0 min decayTime_0
+    val min_1           = lPZ1 min ramp_0
+    val min_2           = min_1 min 0.17019051
+    val min_3           = min_2 min min_0
+    val decayTime_1     = decayTime_0.cos
+    val in_3            = Protect(atan2, -inf, inf, true)
+    val dur_1           = Protect(bPZ2_0, 1.0E-6, 30.0, false)
+    val ramp_1          = Ramp.ar(in_3, dur = dur_1)
+    val min_4           = ramp_1 min min_3
+    val min_5           = ramp_1 min 0.0
+    val blip            = Blip.ar(freq = 10.0, numHarm = 1.0)
+    val min_6           = blip min min_3
+    val min_7           = min_4 min min_6
+    val min_8           = min_5 min lPZ1
+    val times           = min_6 * min_7
+    val in_4            = Protect(ramp_1, -inf, inf, true)
+    val maxDelayTime_0  = Protect(times, 0.0, 20.0, false)
+    val delayTime_0     = (0.0: GE) min maxDelayTime_0
+    val allpassL        = AllpassL.ar(in_4, maxDelayTime = maxDelayTime_0, delayTime = delayTime_0,
+      decayTime = decayTime_0)
+    val in_5            = Protect(min_7, -inf, inf, true)
+    val hPZ1            = HPZ1.ar(in_5)
+    val min_9           = min_3 min allpassL
+    val min_10          = min_9 min hPZ1
+    val sqrdif          = min_10 sqrDif ramp_1
+    val min_11          = min_4 min min_9
+    val eq              = min_7 sig_== min_11
+    val in_6            = Protect(eq, -inf, inf, true)
+    val rq_0            = Protect(0.01, 0.01, 100.0, false)
+    val rLPF            = RLPF.ar(in_6, freq = 10.0, rq = rq_0)
+    val min_12          = min_3 min rLPF
+    val in_7            = Protect(min_0, -inf, inf, true)
+    val maxDelayTime_1  = Protect(rLPF, 0.0, 20.0, false)
+    val delayTime_1     = (0.0: GE) min maxDelayTime_1
+    val combL           = CombL.ar(in_7, maxDelayTime = maxDelayTime_1, delayTime = delayTime_1,
+      decayTime = decayTime_1)
+    val min_13          = blip min combL
+    val in_8            = Protect(min_13, -inf, inf, true)
+    val time            = Protect(sqrdif, 1.0E-6, 30.0, false)
+    val lag             = Lag.ar(in_8, time = time)
+    val in_9            = Protect(times, -inf, inf, true)
+    val freq_0          = Protect(allpassL, -20000.0, 20000.0, false)
+    val phase_0         = Protect(lag, -inf, inf, false)
+    val freqShift_0     = FreqShift.ar(in_9, freq = freq_0, phase = phase_0)
+    val min_14          = freqShift_0 min ramp_1
+    val in_10           = Protect(min_4, -inf, inf, true)
+    val bPZ2_1          = BPZ2.ar(in_10)
+    val min_15          = sqrdif min bPZ2_1
+    val min_16          = min_15 min min_9
+    val min_17          = min_15 min min_3
+    val in_11           = Protect(min_13, -inf, inf, true)
+    val coeff           = Protect(min_4, -1.0, 1.0, false)
+    val oneZero         = OneZero.ar(in_11, coeff = coeff)
+    val min_18          = oneZero min min_7
+    val in_12           = Protect(min_18, -inf, inf, true)
+    val freq_1          = Protect(min_8, -20000.0, 20000.0, false)
+    val phase_1         = Protect(lag, -inf, inf, false)
+    val freqShift_1     = FreqShift.ar(in_12, freq = freq_1, phase = phase_1)
+    val in_13           = Protect(min_8, -inf, inf, true)
+    val rq_1            = Protect(freqShift_1, 0.01, 100.0, false)
+    val resonz          = Resonz.ar(in_13, freq = 10.0, rq = rq_1)
+    val min_19          = min_8 min resonz
+    val min_20          = blip min min_12
+    val min_21          = rLPF min 0.0
+    val neq             = min_19 sig_!= min_3
+    val phase_2         = Protect(bPZ2_1, 0.0, 1.0, false)
+    val impulse         = Impulse.ar(freq = 0.1, phase = phase_2)
+    val gt              = (0.0: GE) > min_7
+    val min_22          = min_8 min freqShift_1
+    val geq             = min_4 >= min_12
+    val mix             = Mix(
+      Seq[GE](min_14, min_16, min_17, min_20, min_21, neq, impulse, gt, min_22, geq))
     NegatumOut(mix)
   }
 
