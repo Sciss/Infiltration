@@ -44,7 +44,7 @@ object OptimizeTest {
     }
   }
 
-  val gIn: SynthGraph = SynthGraph {
+  lazy val gIn: SynthGraph = SynthGraph {
     import de.sciss.synth.{GE, _}
     import de.sciss.synth.ugen._
     val inf = Float.PositiveInfinity
@@ -68,7 +68,7 @@ object OptimizeTest {
   // this is the result, which is wrong.
   // the DC calculation is wrong. It should be 1.0 + 0.64,
   // but somehow it includes
-  val gOut: SynthGraph = SynthGraph {
+  lazy val gOut: SynthGraph = SynthGraph {
     import de.sciss.synth.{GE, _}
     import de.sciss.synth.ugen._
 
