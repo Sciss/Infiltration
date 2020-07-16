@@ -21,7 +21,6 @@ import de.sciss.lucre.stm
 import de.sciss.lucre.stm.Folder
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.synth.Sys
-import de.sciss.mellite.{Application, Mellite}
 import de.sciss.negatum.Optimize
 import de.sciss.synth.SynthGraph
 import de.sciss.synth.proc.Implicits._
@@ -36,9 +35,7 @@ object OptimizeWorkspace {
     require (args.length == 1, "Must provide a workspace .mllt argument")
     val wsDir = file(args(0))
 
-    Application.init(Mellite)
-    Mellite.initTypes()
-    RunNegatum.tweak()
+    Parametrize.init()
 
     type S  = Durable
     val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = false)

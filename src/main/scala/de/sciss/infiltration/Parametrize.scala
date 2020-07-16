@@ -14,28 +14,32 @@
 package de.sciss.infiltration
 
 import java.awt.EventQueue
+import java.util.{Timer, TimerTask}
 
 import de.sciss.file._
 import de.sciss.fscape.Graph
 import de.sciss.fscape.lucre.FScape
-import de.sciss.infiltration.SelectionTest.{audioDir, trunkIdMap}
+import de.sciss.infiltration.OptimizeWorkspace.ProcSpec
 import de.sciss.kollflitz.Vec
 import de.sciss.lucre.artifact.{Artifact, ArtifactLocation}
-import de.sciss.lucre.expr.{DoubleObj, IntObj}
-import de.sciss.lucre.synth.InMemory
+import de.sciss.lucre.expr.{DoubleObj, DoubleVector, IntObj}
+import de.sciss.lucre.stm
+import de.sciss.lucre.stm.Folder
+import de.sciss.lucre.stm.store.BerkeleyDB
+import de.sciss.lucre.synth.{InMemory, Sys}
 import de.sciss.mellite.{Application, Mellite, Prefs}
 import de.sciss.negatum.Negatum.SynthGraphT
-import de.sciss.negatum.{Edge, Vertex}
-import de.sciss.negatum.impl.{Chromosome, MkSynthGraph, MkTopology, ParamRanges, UGens}
-import de.sciss.nuages.ParamSpec
+import de.sciss.negatum.Vertex
+import de.sciss.negatum.impl.{Chromosome, MkSynthGraph, MkTopology, ParamRanges}
+import de.sciss.nuages.{ExponentialWarp, LinearWarp, ParamSpec}
 import de.sciss.numbers
 import de.sciss.processor.Processor
 import de.sciss.span.Span
 import de.sciss.synth.io.AudioFile
-import de.sciss.synth.proc.graph.Attribute
-import de.sciss.synth.proc.impl.MkSynthGraphSource
-import de.sciss.synth.proc.{Bounce, Proc, Runner, TimeRef, Universe}
-import de.sciss.synth.ugen.{BinaryOpUGen, ControlValues, RandID}
+import de.sciss.synth.proc.Implicits._
+import de.sciss.synth.proc.graph.{Attribute, Param}
+import de.sciss.synth.proc.{Bounce, Durable, Proc, Runner, TimeRef, Universe, Workspace}
+import de.sciss.synth.ugen.{NegatumOut, RandID}
 import de.sciss.synth.{GE, SynthGraph, UGenSpec, audio}
 
 import scala.concurrent.{ExecutionContext, Future, Promise}
@@ -44,10 +48,141 @@ import scala.util.control.NonFatal
 import scala.util.{Failure, Success}
 
 object Parametrize {
-  def main(args: Array[String]): Unit = {
+  def init(): Unit = {
     Application.init(Mellite)
     Mellite.initTypes()
-    Swing.onEDT(run(gIn10))
+    RunNegatum.tweak()
+  }
+
+  def main(args: Array[String]): Unit = {
+    if (args.headOption.contains("--test")) {
+      test()
+      return
+    }
+
+    require (args.length == 1, "Must provide a workspace .mllt argument")
+    val wsDir = file(args(0))
+
+    Parametrize.init()
+    NegatumOut.MONO = false
+
+    type S  = Durable
+    val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = false)
+    val _ws = Workspace.Durable.read(wsDir, dsf)
+    val (iterMap: Map[Int, Vec[ProcSpec]], folderOutH) = _ws.system.step { implicit tx =>
+      val r         = _ws.root
+      val folderIn  = r.$[Folder]("opt").getOrElse(sys.error("No folder 'opt' found"))
+      val folderOut = r.$[Folder]("par").getOrElse {
+        val f = Folder[S]()
+        f.name = "par"
+        r.addLast(f)
+        f
+      }
+      val _iterMap = folderIn.iterator.collect {
+        case folderIt: Folder[S] =>
+          val itName  = folderIt.name
+          val iterIdx = {
+            val i = itName.indexOf(' ')
+            itName.substring(i + 1).toInt
+          }
+
+          val procs = folderIt.iterator.collect {
+            case p: Proc[S] =>
+              ProcSpec(p.name, p.graph.value)
+          } .toIndexedSeq
+
+          (iterIdx, procs)
+      } .toMap
+
+      (_iterMap, tx.newHandle(folderOut))
+    }
+
+    run(_ws, iterMap, folderOutH = folderOutH)
+  }
+
+  def run[S <: Sys[S]](ws: Workspace[S], iterMap: Map[Int, Vec[ProcSpec]],
+                       folderOutH: stm.Source[S#Tx, Folder[S]]): Unit = {
+    val iterKeys0 = iterMap.keys.toIndexedSeq.sorted
+    import de.sciss.mellite.Mellite.executionContext
+    import ws.cursor
+
+    val timer = new Timer
+    val numExisting = cursor.step { implicit tx => folderOutH().size }
+    println(s"Iterations: ${numExisting} of ${iterKeys0.size}")
+
+    val iterKeys = iterKeys0.drop(numExisting)
+    val futAll = Parametrize.sequence(iterKeys) { iterIdx =>
+      println(s"Iteration $iterIdx")
+      val folderItH = cursor.step { implicit tx =>
+        val folderOut = folderOutH()
+        val folderIt  = Folder[S]()
+        folderIt.name = s"It $iterIdx"
+        folderOut.addLast(folderIt)
+        tx.newHandle(folderIt)
+      }
+      val procs = iterMap(iterIdx)
+      Parametrize.sequence(procs) { procSpec =>
+        println(s"   ${procSpec.name}")
+
+        val o = runGraph(procSpec.graph)
+
+        val ttTimeOut = new TimerTask {
+          def run(): Unit = currentBnc.foreach(_.abort())
+        }
+        timer.schedule(ttTimeOut, 40000L)
+
+        o.transform { tr =>
+          ttTimeOut.cancel()
+          tr match {
+            case Success(res) =>
+              cursor.step { implicit tx =>
+                val folderIt  = folderItH()
+                val pOut      = Proc[S]()
+                pOut.name     = s"${procSpec.name}-par"
+                pOut.graph()  = res.graph
+                val pAttr     = pOut.attr
+//                pAttr.put(Proc.attrSource, Code.Obj.newVar(Code.Obj.newConst(
+//                  Code.SynthGraph(res.source))))
+                res.specs.zipWithIndex.foreach { case ((default, spec), si) =>
+                  val defaultN  = Vector.fill(4)(default)
+                  val paramObj  = DoubleVector.newVar(DoubleVector.newConst[S](defaultN))
+                  val specObj   = ParamSpec.Obj.newConst[S](spec)
+                  val key       = s"p${si + 1}"
+                  val specKey   = ParamSpec.composeKey(key)
+                  pAttr.put(specKey , specObj )
+                  pAttr.put(key     , paramObj)
+                }
+                folderIt.addLast(pOut)
+              }
+
+            case Failure(ex) =>
+              println("... failed : ")
+              println(ex)
+              ex.printStackTrace()
+          }
+
+          Success(()) // ignore errors
+        }
+      }
+    }
+
+    futAll.onComplete { tr =>
+      println(tr)
+      ws.close()
+      sys.exit(if (tr.isSuccess) 0 else 1)
+    }
+  }
+
+  def test(): Unit = {
+    init()
+    Swing.onEDT {
+      val fut = runGraph(gIn10)
+      import de.sciss.mellite.Mellite.executionContext
+      fut.onComplete { tr =>
+        if (tr.isFailure) println(tr)
+        sys.exit(if (tr.isSuccess) 0 else 1)
+      }
+    }
   }
 
   val VERBOSE = false
@@ -70,6 +205,26 @@ object Parametrize {
       Attribute.ar(name, values)
 
     def copy(): Vertex = ControlVertex(name = name, values = values)
+  }
+
+  final case class ParamVertex(name: String, /*spec: ParamSpec,*/ default: Vec[Float]) extends Vertex.UGen {
+    val info: UGenSpec = UGenSpec(
+      name        = "ParamVertex",
+      attr        = Set.empty,
+      rates       = UGenSpec.Rates.Implied(audio, UGenSpec.RateMethod.Default),
+      args        = Vector.empty,
+      inputs      = Vector.empty,
+      outputs     = Vector.tabulate(default.size) { _ =>
+        UGenSpec.Output(name = None, shape = UGenSpec.SignalShape.Generic, variadic = None)
+      },
+      doc         = None,
+      elemOption  = None,
+    )
+
+    def instantiate(ins: Vec[(AnyRef, Class[_])]): GE =
+      Param.ar(name, default)
+
+    def copy(): Vertex = ParamVertex(name = name, /*spec = spec,*/ default = default)
   }
 
   def mkTestValues(min: Double, max: Double): Vec[Double] = {
@@ -113,7 +268,7 @@ object Parametrize {
       genBi(n = 31, lo = min, hi = max)
     }
   }
-  
+
 //  def include(in: Vec[Double], value: Double): Vec[Double] = {
 //    require (in == in.sorted)
 //    val idx0 = in.indexWhere(_ > value)
@@ -135,7 +290,7 @@ object Parametrize {
 
     val (objH, _u) = inMemory.step { implicit tx =>
       values.zipWithIndex.map { case (value, gi) =>
-        val proc = Proc[I]
+        val proc = Proc[I]()
         val graphP = graph.copy(
           sources = RandID.ir(gi) +: graph.sources
         )
@@ -147,7 +302,7 @@ object Parametrize {
     }
     implicit val u: Universe[I] = _u
 
-    val bncCfg              = Bounce.Config[I]
+    val bncCfg              = Bounce.Config[I]()
     bncCfg.group            = objH // :: Nil
     Application.applyAudioPreferences(bncCfg.server, bncCfg.client, useDevice = false, pickPort = false)
     val sCfg                = bncCfg.server
@@ -189,7 +344,9 @@ object Parametrize {
       p.future
     }
 
-  def runOne(topIn: SynthGraphT, use: Use): Future[Option[RunOne]] = {
+  private var currentBnc = Option.empty[Processor[Any]]  // XXX TODO hackish
+
+  def runOne(topIn: SynthGraphT, use: Use, dur: Double, sampleRate: Double): Future[Option[RunOne]] = {
     val Use(vc, min, max) = use // constWithUse(0) // .head
     val testValues  = mkTestValues(min = min, max = max)
     val default     = vc.f.toDouble
@@ -201,8 +358,8 @@ object Parametrize {
     }
     val graph = MkSynthGraph(topTest)
 
-    val trunkId   = 11
-    val tempSpec  = AudioFile.readSpec(audioDir / s"trunk$trunkId/trunk_${trunkIdMap(trunkId)}-1-hilbert-curve.aif")
+//    val trunkId   = 11
+//    val tempSpec  = AudioFile.readSpec(audioDir / s"trunk$trunkId/trunk_${trunkIdMap(trunkId)}-1-hilbert-curve.aif")
 
     import de.sciss.mellite.Mellite.executionContext
 
@@ -211,8 +368,15 @@ object Parametrize {
     val corrF = File.createTemp(suffix = ".aif")
 //    println(corrF)
 
-    val futBnc = bounceVariants(graph, values = values, audioF = bncF, duration = tempSpec.numFrames/tempSpec.sampleRate,
-      sampleRate = tempSpec.sampleRate.toInt)
+    val futBnc = bounceVariants(
+      graph       = graph,
+      values      = values,
+      audioF      = bncF,
+      duration    = dur, // tempSpec.numFrames/tempSpec.sampleRate
+      sampleRate  = sampleRate.toInt,
+    )
+    currentBnc = Some(futBnc)
+
     if (VERBOSE) {
       println("Making test bounce...")
     }
@@ -341,7 +505,9 @@ object Parametrize {
     //e2.poll("e2")
   }
 
-  def run(_gIn: SynthGraph): Unit = {
+  case class Result(graph: SynthGraph, specs: Seq[(Double, ParamSpec)] /*, source: String*/)
+
+  def runGraph(_gIn: SynthGraph, dur: Double = 5.9, sampleRate: Double = 44100.0): Future[Result] = {
     val t0 = System.currentTimeMillis()
 
     val topIn     = MkTopology(_gIn)
@@ -427,90 +593,81 @@ object Parametrize {
 
     val futCorr = sequence(constWithUse) { use =>
       futEDT {
-        runOne(topIn, use)
+        runOne(topIn, use, dur = dur, sampleRate = sampleRate)
       }
     }
 
-    futCorr.onComplete { tr =>
+    futCorr.map { seq =>
       val t1 = System.currentTimeMillis()
-      println(s"Done (took ${(t1 - t0)/1000}s). Ok? ${tr.isSuccess}")
-      tr match {
-        case Success(seq) =>
-          if (VERBOSE) {
-            println(seq.mkString("\n"))
-          }
-          val hasRun = (seq zip constWithUse).collect {
-            case (Some(run), vc) => (run, vc)
-          }
-          val sortRun = hasRun.sortBy(_._1.corr).take(5)
-          println("\n--SEL---\n")
-          println(sortRun.mkString("\n"))
+      println(s"Done (took ${(t1 - t0)/1000}s).")
 
-          val topPatch = sortRun.zipWithIndex.foldLeft(topIn) { case (topAcc, ((run, use), idx)) =>
-            import use.vc
-            import numbers.Implicits._
-            val v0      = vc.f.linLin(run.min, run.max, 0.0, 1.0)
-            val vCtl    = ControlVertex(s"ctl_$idx", Vector(v0.toFloat))
-            val nMul    = s"Bin_${BinaryOpUGen.Times.id}"
-            val nAdd    = s"Bin_${BinaryOpUGen.Plus .id}"
-            val sMul    = UGens.map(nMul)
-            val sAdd    = UGens.map(nAdd)
-            val vMul    = Vertex.UGen(sMul)
-            val vAdd    = Vertex.UGen(sAdd)
-            val vcMul   = Vertex.Constant((run.max - run.min).toFloat)
-            val vcAdd   = Vertex.Constant( run.min.toFloat)
-            var topOut  = topAcc
-            topOut      = topOut.addVertex(vCtl)
-            topOut      = topOut.addVertex(vMul)
-            topOut      = topOut.addVertex(vAdd)
-            topOut      = topOut.addEdge(Edge(vMul, vCtl  , "a")).get._1
-            topOut      = topOut.addVertex(vcMul)
-            topOut      = topOut.addEdge(Edge(vMul, vcMul , "b")).get._1
-            topOut      = topOut.addEdge(Edge(vAdd, vMul  , "a")).get._1
-            topOut      = topOut.addVertex(vcAdd)
-            topOut      = topOut.addEdge(Edge(vAdd, vcAdd , "b")).get._1
-            topOut      = Chromosome.replaceVertex(topOut, vOld = vc, vNew = vAdd)
-            topOut
-          }
-
-          val gPatch    = MkSynthGraph(topPatch)
-          val srcPatch  = MkSynthGraphSource(gPatch)
-          println()
-          println(srcPatch)
-
-        case Failure(ex) =>
-          println(ex)
+      if (VERBOSE) {
+        println(seq.mkString("\n"))
       }
+      val hasRun: Seq[(RunOne, Use)] = (seq zip constWithUse).collect {
+        case (Some(run), vc) => (run, vc)
+      }
+      val sortRun = hasRun.sortBy(_._1.corr).take(5)
+
+      if (VERBOSE) {
+        println("\n--SEL---\n")
+        println(sortRun.mkString("\n"))
+      } else {
+        println(s"  num-params: ${sortRun.size}")
+      }
+
+//          val topPatch = sortRun.zipWithIndex.foldLeft(topIn) { case (topAcc, ((run, use), idx)) =>
+//            import use.vc
+//            import numbers.Implicits._
+//            val v0      = vc.f.linLin(run.min, run.max, 0.0, 1.0)
+//            val vCtl    = ControlVertex(s"ctl_$idx", Vector(v0.toFloat))
+//            val nMul    = s"Bin_${BinaryOpUGen.Times.id}"
+//            val nAdd    = s"Bin_${BinaryOpUGen.Plus .id}"
+//            val sMul    = UGens.map(nMul)
+//            val sAdd    = UGens.map(nAdd)
+//            val vMul    = Vertex.UGen(sMul)
+//            val vAdd    = Vertex.UGen(sAdd)
+//            val vcMul   = Vertex.Constant((run.max - run.min).toFloat)
+//            val vcAdd   = Vertex.Constant( run.min.toFloat)
+//            var topOut  = topAcc
+//            topOut      = topOut.addVertex(vCtl)
+//            topOut      = topOut.addVertex(vMul)
+//            topOut      = topOut.addVertex(vAdd)
+//            topOut      = topOut.addEdge(Edge(vMul, vCtl  , "a")).get._1
+//            topOut      = topOut.addVertex(vcMul)
+//            topOut      = topOut.addEdge(Edge(vMul, vcMul , "b")).get._1
+//            topOut      = topOut.addEdge(Edge(vAdd, vMul  , "a")).get._1
+//            topOut      = topOut.addVertex(vcAdd)
+//            topOut      = topOut.addEdge(Edge(vAdd, vcAdd , "b")).get._1
+//            topOut      = Chromosome.replaceVertex(topOut, vOld = vc, vNew = vAdd)
+//            topOut
+//          }
+
+      val topPatch = sortRun.zipWithIndex.foldLeft(topIn) { case (topAcc, ((_, use), idx)) =>
+        import use.vc
+        val vCtl    = ParamVertex(s"p${idx + 1}", /*spec,*/ Vector.fill(4)(vc.f))
+        var topOut  = topAcc
+        topOut      = topOut.addVertex(vCtl)
+        topOut      = Chromosome.replaceVertex(topOut, vOld = vc, vNew = vCtl)
+        topOut
+      }
+
+      val specs     = sortRun.map { case (run, use) =>
+        import use.vc
+        val warp    = if (run.min.sign == run.max.sign) ExponentialWarp else LinearWarp
+        val spec    = ParamSpec(run.min, run.max, warp)
+        val default = spec.inverseMap(vc.f)
+        (default, spec)
+      }
+
+      val gPatch    = MkSynthGraph(topPatch, expandProtect = true, expandIO = true)
+//      val srcPatch  = MkSynthGraphSource(gPatch)
+
+//      println()
+//      println(srcPatch)
+
+      Result(gPatch, specs = specs /*, srcPatch*/)
     }
-
-
-//      println(data.map { corr =>
-//        import numbers.Implicits._
-//        (corr.value.ampDb, corr.amp.ampDb)
-//      })
-//      val idxStart = data.indexWhere    (_.amp > 0.01)  // ca. -40 dB
-//      val idxStop  = data.lastIndexWhere(_.amp > 0.01) + 1
-//      if (idxStart >= 0 && idxStop > idxStart) {
-//        val minCorr     = data.slice(idxStart, idxStop).map(_.value).min
-//        val valueRange  = testValues.slice(idxStart, idxStop)
-//        val valueGP     = use.vc.f.toDouble
-//        val valueMin    = math.min(valueGP, valueRange.head)
-//        val valueMax    = math.max(valueGP, valueRange.last)
-//        import numbers.Implicits._
-//        println(f"VALUES (gp was ${use.vc.f}): $valueMin to $valueMax ; minCorr = ${minCorr.ampDb}%g dB")
-//      } else {
-//        println("Nope.")
-//      }
-
-//    val topOut = constants.zipWithIndex.foldLeft(topIn) { case (topAcc, (vc, idx)) =>
-//      val vCtl = ControlVertex(s"ctl_$idx", Vector(vc.f))
-//      val topAdd = topAcc.addVertex(vCtl)
-//      Chromosome.replaceVertex(topAdd, vOld = vc, vNew = vCtl)
-//    }
-//
-//    val _gOut   = MkSynthGraph(topOut)
-//    val srcOut  = MkSynthGraphSource(_gOut)
-//    println(srcOut)
   }
 
   /*

@@ -2,7 +2,7 @@ lazy val commonSettings = Seq(
   name               := "Infiltration",
   version            := "0.1.0-SNAPSHOT",
   organization       := "de.sciss",
-  scalaVersion       := "2.13.1",
+  scalaVersion       := "2.13.3",
   licenses           := Seq("AGPL v3+" -> url("http://www.gnu.org/licenses/agpl-3.0.txt")),
   homepage           := Some(url(s"https://git.iem.at/sciss/${name.value}")),
   scalacOptions     ++= Seq("-deprecation", "-unchecked", "-feature", "-encoding", "utf8", "-Xsource:2.13", "-Xlint:-stars-align,_"),
@@ -13,10 +13,10 @@ lazy val commonSettings = Seq(
 
 lazy val deps = new {
   val fscape          = "2.36.1"
-  val lucre           = "3.17.3"
+  val lucre           = "3.17.4"
   val melliteApp      = "2.48.2"
-  val negatum         = "0.15.3"
-  val soundProcesses  = "3.35.7"
+  val negatum         = "0.15.4-SNAPSHOT"
+  val soundProcesses  = "3.35.8"
   val submin          = "0.3.4"
 //  val wolkenpumpe = "2.40.0"
 }

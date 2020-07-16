@@ -27,7 +27,7 @@ object BuilderUtil {
   def any2stringadd: Any = ()
 
   def mkFolder[S <: Sys[S]](parent: Folder[S], name: String)(implicit tx: S#Tx): Folder[S] =
-    mkObj[S, Folder](parent, name, -1)(Folder[S])
+    mkObj[S, Folder](parent, name, -1)(Folder[S]())
 
   def mkObj[S <: Sys[S], R[~ <: stm.Sys[~]] <: Obj[~]](parent: Folder[S], name: String, version: Int)
                                                       (create: => R[S])

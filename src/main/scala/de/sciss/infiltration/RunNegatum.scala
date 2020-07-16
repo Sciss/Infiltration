@@ -19,7 +19,7 @@ import de.sciss.lucre.stm
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.stm.{Folder, Sys}
 import de.sciss.mellite.{Application, Mellite}
-import de.sciss.negatum.impl.{NegatumRenderingImpl, ParamRanges, UGens}
+import de.sciss.negatum.impl.{NegatumRenderingImpl, UGens}
 import de.sciss.negatum.{Negatum, Optimize, Rendering}
 import de.sciss.synth.SynthGraph
 import de.sciss.synth.io.AudioFile
