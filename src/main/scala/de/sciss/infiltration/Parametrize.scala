@@ -27,6 +27,7 @@ import de.sciss.mellite.{Application, Mellite, Prefs}
 import de.sciss.negatum.Negatum.SynthGraphT
 import de.sciss.negatum.{Edge, Vertex}
 import de.sciss.negatum.impl.{Chromosome, MkSynthGraph, MkTopology, ParamRanges, UGens}
+import de.sciss.nuages.ParamSpec
 import de.sciss.numbers
 import de.sciss.processor.Processor
 import de.sciss.span.Span
@@ -34,7 +35,7 @@ import de.sciss.synth.io.AudioFile
 import de.sciss.synth.proc.graph.Attribute
 import de.sciss.synth.proc.impl.MkSynthGraphSource
 import de.sciss.synth.proc.{Bounce, Proc, Runner, TimeRef, Universe}
-import de.sciss.synth.ugen.{BinaryOpUGen, RandID}
+import de.sciss.synth.ugen.{BinaryOpUGen, ControlValues, RandID}
 import de.sciss.synth.{GE, SynthGraph, UGenSpec, audio}
 
 import scala.concurrent.{ExecutionContext, Future, Promise}
@@ -46,7 +47,7 @@ object Parametrize {
   def main(args: Array[String]): Unit = {
     Application.init(Mellite)
     Mellite.initTypes()
-    Swing.onEDT(run(gIn9))
+    Swing.onEDT(run(gIn10))
   }
 
   val VERBOSE = false
@@ -70,7 +71,7 @@ object Parametrize {
 
     def copy(): Vertex = ControlVertex(name = name, values = values)
   }
-  
+
   def mkTestValues(min: Double, max: Double): Vec[Double] = {
     def genPos(n: Int, hi: Double): Vec[Double] = {
       val lo    = math.min(0.05, hi / 10000)
@@ -191,7 +192,8 @@ object Parametrize {
   def runOne(topIn: SynthGraphT, use: Use): Future[Option[RunOne]] = {
     val Use(vc, min, max) = use // constWithUse(0) // .head
     val testValues  = mkTestValues(min = min, max = max)
-    val values      = vc.f.toDouble +: testValues
+    val default     = vc.f.toDouble
+    val values      = default +: testValues
     val vCtl        = ControlVertex("value", Vector(vc.f))
     val topTest     = {
       val t0 = topIn.addVertex(vCtl)
@@ -917,6 +919,42 @@ object Parametrize {
     val geq             = min_4 >= min_12
     val mix             = Mix(
       Seq[GE](min_14, min_16, min_17, min_20, min_21, neq, impulse, gt, min_22, geq))
+    NegatumOut(mix)
+  }
+
+  lazy val gIn10: SynthGraph = SynthGraph {
+    import de.sciss.synth.GE
+    import de.sciss.synth.ugen._
+    val inf = Float.PositiveInfinity
+    // negatum-864a4fe-opt
+    NegatumIn()
+    val freq          = Protect(3382.8875, 0.1, 60.0, false)
+    val impulse_0     = Impulse.ar(freq = freq, phase = 0.10654729)
+    val in_0          = Protect(impulse_0, -inf, inf, true)
+    val hPZ1          = HPZ1.ar(in_0)
+    val in_1          = Protect(hPZ1, -inf, inf, true)
+    val integrator    = Integrator.ar(in_1, coeff = 0.0068862666)
+    val ring3         = (3382.8875: GE) ring3 integrator
+    val min_0         = ring3 min 0.10654729
+    val impulse_1     = Impulse.ar(freq = 0.1, phase = 1.0)
+    val min_1         = (0.0: GE) min ring3
+    val times         = min_1 * 3.0
+    val in_2          = Protect(min_1, -inf, inf, true)
+    val pitchRatio    = Protect(impulse_1, 0.0, 4.0, false)
+    val pitchShift    = PitchShift.ar(in_2, winSize = 0.001, pitchRatio = pitchRatio,
+      pitchDispersion = 0.0, timeDispersion = 0.0)
+    val in_3          = Protect(min_1, -inf, inf, true)
+    val maxDelayTime  = Protect(0.0, 0.01, 20.0, false)
+    val delayTime     = (0.0: GE) min maxDelayTime
+    val allpassL      = AllpassL.ar(in_3, maxDelayTime = maxDelayTime, delayTime = delayTime,
+      decayTime = 0.0)
+    val min_2         = allpassL min 0.0
+    val atan2         = (0.0: GE) atan2 min_1
+    val in_4          = Protect(atan2, -inf, inf, true)
+    val rq            = Protect(0.01, 0.01, 100.0, false)
+    val resonz        = Resonz.ar(in_4, freq = 3382.8875, rq = rq)
+    val dC            = DC.ar(0.8758479)
+    val mix           = Mix(Seq[GE](min_0, times, pitchShift, min_2, resonz, dC))
     NegatumOut(mix)
   }
 

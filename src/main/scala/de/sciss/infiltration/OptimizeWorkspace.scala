@@ -76,12 +76,15 @@ object OptimizeWorkspace {
 
   def run[S <: Sys[S]](ws: Workspace[S], iterMap: Map[Int, Vec[ProcSpec]],
                        folderOutH: stm.Source[S#Tx, Folder[S]]): Unit = {
-    val iterKeys  = iterMap.keys.toIndexedSeq.sorted
+    val iterKeys0 = iterMap.keys.toIndexedSeq.sorted
     import de.sciss.mellite.Mellite.executionContext
     import ws.cursor
 
     val timer = new Timer
+    val numExisting = cursor.step { implicit tx => folderOutH().size }
+    println(s"Iterations: ${numExisting} of ${iterKeys0.size}")
 
+    val iterKeys = iterKeys0.drop(numExisting)
     val futAll = Parametrize.sequence(iterKeys) { iterIdx =>
       println(s"Iteration $iterIdx")
       val folderItH = cursor.step { implicit tx =>
