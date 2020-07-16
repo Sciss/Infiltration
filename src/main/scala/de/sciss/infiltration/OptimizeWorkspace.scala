@@ -13,9 +13,10 @@
 
 package de.sciss.infiltration
 
-import java.util.{Timer, TimerTask}
+import java.util.Timer
 
 import de.sciss.file._
+import de.sciss.infiltration.Implicits._
 import de.sciss.kollflitz.Vec
 import de.sciss.lucre.stm
 import de.sciss.lucre.stm.Folder
@@ -77,7 +78,7 @@ object OptimizeWorkspace {
     import de.sciss.mellite.Mellite.executionContext
     import ws.cursor
 
-    val timer = new Timer
+    implicit val timer: Timer = new Timer
     val numExisting = cursor.step { implicit tx => folderOutH().size }
     println(s"Iterations: ${numExisting} of ${iterKeys0.size}")
 
@@ -103,17 +104,9 @@ object OptimizeWorkspace {
           expandIO      = false, // true,
         )
         val o = Optimize(oCfg)
-        o.start()
-
-        val ttTimeOut = new TimerTask {
-          def run(): Unit = o.abort()
-        }
-        timer.schedule(ttTimeOut, 10000L)
-
-//        o.onComplete(_ => ttTimeOut.cancel())
+        o.startWithTimeout(10.0)
 
         o.transform { tr =>
-          ttTimeOut.cancel()
           tr match {
             case Success(res) =>
               println(s"Optimization found ${res.numConst} constant replacement and ${res.numEqual} redundant elements.")

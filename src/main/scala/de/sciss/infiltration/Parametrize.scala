@@ -19,6 +19,7 @@ import java.util.{Timer, TimerTask}
 import de.sciss.file._
 import de.sciss.fscape.Graph
 import de.sciss.fscape.lucre.FScape
+import de.sciss.infiltration.Implicits.ProcessorOps
 import de.sciss.infiltration.OptimizeWorkspace.ProcSpec
 import de.sciss.kollflitz.Vec
 import de.sciss.lucre.artifact.{Artifact, ArtifactLocation}
@@ -33,7 +34,6 @@ import de.sciss.negatum.Vertex
 import de.sciss.negatum.impl.{Chromosome, MkSynthGraph, MkTopology, ParamRanges}
 import de.sciss.nuages.{ExponentialWarp, LinearWarp, ParamSpec}
 import de.sciss.numbers
-import de.sciss.processor.Processor
 import de.sciss.span.Span
 import de.sciss.synth.io.AudioFile
 import de.sciss.synth.proc.Implicits._
@@ -106,9 +106,9 @@ object Parametrize {
     import de.sciss.mellite.Mellite.executionContext
     import ws.cursor
 
-    val timer = new Timer
+    implicit val timer: Timer = new Timer
     val numExisting = cursor.step { implicit tx => folderOutH().size }
-    println(s"Iterations: ${numExisting} of ${iterKeys0.size}")
+    println(s"Iterations: $numExisting of ${iterKeys0.size}")
 
     val iterKeys = iterKeys0.drop(numExisting)
     val futAll = Parametrize.sequence(iterKeys) { iterIdx =>
@@ -122,17 +122,10 @@ object Parametrize {
       }
       val procs = iterMap(iterIdx)
       Parametrize.sequence(procs) { procSpec =>
-        println(s"   ${procSpec.name}")
+        println(s"  ${procSpec.name}")
 
         val o = runGraph(procSpec.graph)
-
-        val ttTimeOut = new TimerTask {
-          def run(): Unit = currentBnc.foreach(_.abort())
-        }
-        timer.schedule(ttTimeOut, 40000L)
-
         o.transform { tr =>
-          ttTimeOut.cancel()
           tr match {
             case Success(res) =>
               cursor.step { implicit tx =>
@@ -176,6 +169,7 @@ object Parametrize {
   def test(): Unit = {
     init()
     Swing.onEDT {
+      implicit val timer: Timer = new Timer
       val fut = runGraph(gIn10)
       import de.sciss.mellite.Mellite.executionContext
       fut.onComplete { tr =>
@@ -282,7 +276,7 @@ object Parametrize {
   // must run on EDT because of preferences
   def bounceVariants(graph: SynthGraph, values: Vec[Double], audioF: File, duration: Double, sampleRate: Int,
                      valueKey: String = "value")
-                     (implicit exec: ExecutionContext): Processor[Any] = {
+                     (implicit exec: ExecutionContext, timer: Timer): Future[Any] = {
     type I  = InMemory
     implicit val iCursor: I = inMemory
 
@@ -318,10 +312,8 @@ object Parametrize {
     // bc.init : (S#Tx, Server) => Unit
     bncCfg.span             = Span(0L, (duration * TimeRef.SampleRate).toLong)
     val bnc0                = Bounce[I]().apply(bncCfg)
-    // tx.afterCommit {
-    bnc0.start()
-    // }
-    bnc0
+//    bnc0
+    bnc0.startWithTimeout(10.0)
   }
 
   final case class Use(vc: Vertex.Constant, min: Double, max: Double)
@@ -344,9 +336,10 @@ object Parametrize {
       p.future
     }
 
-  private var currentBnc = Option.empty[Processor[Any]]  // XXX TODO hackish
+//  private var currentBnc = Option.empty[Processor[Any]]  // XXX TODO hackish
 
-  def runOne(topIn: SynthGraphT, use: Use, dur: Double, sampleRate: Double): Future[Option[RunOne]] = {
+  def runOne(topIn: SynthGraphT, use: Use, dur: Double, sampleRate: Double)
+            (implicit timer: Timer): Future[Option[RunOne]] = {
     val Use(vc, min, max) = use // constWithUse(0) // .head
     val testValues  = mkTestValues(min = min, max = max)
     val default     = vc.f.toDouble
@@ -357,9 +350,6 @@ object Parametrize {
       Chromosome.replaceVertex(t0, vOld = vc, vNew = vCtl)
     }
     val graph = MkSynthGraph(topTest)
-
-//    val trunkId   = 11
-//    val tempSpec  = AudioFile.readSpec(audioDir / s"trunk$trunkId/trunk_${trunkIdMap(trunkId)}-1-hilbert-curve.aif")
 
     import de.sciss.mellite.Mellite.executionContext
 
@@ -375,12 +365,12 @@ object Parametrize {
       duration    = dur, // tempSpec.numFrames/tempSpec.sampleRate
       sampleRate  = sampleRate.toInt,
     )
-    currentBnc = Some(futBnc)
+//    currentBnc = Some(futBnc)
 
     if (VERBOSE) {
       println("Making test bounce...")
     }
-    val futCorr = futBnc.flatMap { _ =>
+    val futCorr0 = futBnc.flatMap { _ =>
       if (VERBOSE) {
         println("Correlating...")
       }
@@ -422,13 +412,34 @@ object Parametrize {
 
         _r
       }
-       r.control.status
-//      pReallyDone.future
+
+      val ttTimeOut = new TimerTask {
+        def run(): Unit = {
+          println("FScape timeout")
+          inMemory.step { implicit tx => r.cancel() }
+        }
+      }
+      timer.schedule(ttTimeOut, 15000L)
+
+      val futFSc0 = r.control.status
+
+      val futFSc = futFSc0.transform { tr =>
+        ttTimeOut.cancel()
+        tr
+      }
+
+      futFSc
     }
+
+    val futCorr = futCorr0.transform { tr =>
+      bncF.delete()
+      tr
+    }
+
 //    Await.result(futCorr, Duration.Inf)
 //    println("Done.")
 //    while (corrF.length() == 0L) Thread.sleep(100)
-    futCorr.map { _  =>
+    val futOut0 = futCorr.map { _  =>
       val afCorr = AudioFile.openRead(corrF)
       try {
         val b = afCorr.buffer(2)
@@ -464,9 +475,16 @@ object Parametrize {
 
       } finally {
         afCorr.cleanUp()
-        corrF.delete()
       }
     }
+
+    val futOut = futOut0.transform { tr =>
+      corrF.delete()
+      tr
+    }
+
+    futOut
+
   }
 
   def any2stringadd(in: Any): Any = ()
@@ -507,7 +525,8 @@ object Parametrize {
 
   case class Result(graph: SynthGraph, specs: Seq[(Double, ParamSpec)] /*, source: String*/)
 
-  def runGraph(_gIn: SynthGraph, dur: Double = 5.9, sampleRate: Double = 44100.0): Future[Result] = {
+  def runGraph(_gIn: SynthGraph, dur: Double = 5.9, sampleRate: Double = 44100.0)
+              (implicit timer: Timer): Future[Result] = {
     val t0 = System.currentTimeMillis()
 
     val topIn     = MkTopology(_gIn)
@@ -599,7 +618,7 @@ object Parametrize {
 
     futCorr.map { seq =>
       val t1 = System.currentTimeMillis()
-      println(s"Done (took ${(t1 - t0)/1000}s).")
+      println(s"  Done (took ${(t1 - t0)/1000}s).")
 
       if (VERBOSE) {
         println(seq.mkString("\n"))
