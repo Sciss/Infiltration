@@ -37,6 +37,7 @@ object OptimizeWorkspace {
     val wsDir = file(args(0))
 
     Parametrize.init()
+//    Optimize.MAX_MEM_SIZE_MB = 128
 
     type S  = Durable
     val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = false)
@@ -72,17 +73,25 @@ object OptimizeWorkspace {
     run(_ws, iterMap, folderOutH = folderOutH)
   }
 
-  def run[S <: Sys[S]](ws: Workspace[S], iterMap: Map[Int, Vec[ProcSpec]],
+  def run[S <: Sys[S]](ws: Workspace[S], iterMap0: Map[Int, Vec[ProcSpec]],
                        folderOutH: stm.Source[S#Tx, Folder[S]]): Unit = {
-    val iterKeys0 = iterMap.keys.toIndexedSeq.sorted
-    import de.sciss.mellite.Mellite.executionContext
+    val iterKeys0 = iterMap0.keys.toIndexedSeq.sorted
     import ws.cursor
 
-    implicit val timer: Timer = new Timer
     val numExisting = cursor.step { implicit tx => folderOutH().size }
-    println(s"Iterations: ${numExisting} of ${iterKeys0.size}")
+    println(s"Iterations: $numExisting of ${iterKeys0.size}")
 
-    val iterKeys = iterKeys0.drop(numExisting)
+    val iterKeys  = iterKeys0.drop(numExisting)
+    val iterMap   = if (numExisting == 0) iterMap0 else iterMap0 -- iterKeys0.take(numExisting)
+    // try to use less memory by dropping old iterations (does that help?)
+    runWith(ws, iterMap = iterMap, iterKeys = iterKeys, folderOutH = folderOutH)
+  }
+
+  private def runWith[S <: Sys[S]](ws: Workspace[S], iterMap: Map[Int, Vec[ProcSpec]], iterKeys: Vec[Int],
+                                   folderOutH: stm.Source[S#Tx, Folder[S]]): Unit = {
+    implicit val timer: Timer = new Timer
+    import de.sciss.mellite.Mellite.executionContext
+    import ws.cursor
     val futAll = Parametrize.sequence(iterKeys) { iterIdx =>
       println(s"Iteration $iterIdx")
       val folderItH = cursor.step { implicit tx =>
