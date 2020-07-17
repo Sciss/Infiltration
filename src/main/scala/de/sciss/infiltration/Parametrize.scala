@@ -111,7 +111,7 @@ object Parametrize {
     println(s"Iterations: $numExisting of ${iterKeys0.size}")
 
     val iterKeys = iterKeys0.drop(numExisting)
-    val futAll = Parametrize.sequence(iterKeys) { iterIdx =>
+    val futAll = Parametrize.sequenceUnit(iterKeys) { iterIdx =>
       println(s"Iteration $iterIdx")
       val folderItH = cursor.step { implicit tx =>
         val folderOut = folderOutH()
@@ -121,7 +121,7 @@ object Parametrize {
         tx.newHandle(folderIt)
       }
       val procs = iterMap(iterIdx)
-      Parametrize.sequence(procs) { procSpec =>
+      Parametrize.sequenceUnit(procs) { procSpec =>
         println(s"  ${procSpec.name}")
 
         val o = runGraph(procSpec.graph)
@@ -486,6 +486,12 @@ object Parametrize {
     futOut
 
   }
+
+  def sequenceUnit[A](xs: Seq[A])(f: A => Future[Any])(implicit exec: ExecutionContext): Future[Unit] =
+    xs.foldLeft(Future.successful(())) {
+      case (acc, x) =>
+        acc.flatMap(_ => f(x).map(_ => ()))
+    }
 
   def any2stringadd(in: Any): Any = ()
 

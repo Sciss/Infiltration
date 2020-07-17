@@ -35,8 +35,8 @@ lazy val root = project.in(file("."))
       "de.sciss" %  "submin"        % deps.submin,
 //      "de.sciss" %% "wolkenpumpe"   % deps.wolkenpumpe,
     ),
-    mainClass             in assembly := Some("de.sciss.infiltration.RunNegatum"),
-    assemblyJarName       in assembly := "RunNegatum.jar",
+    mainClass             in assembly := Some("de.sciss.infiltration.Main"),
+    assemblyJarName       in assembly := "Infiltration.jar",
     target                in assembly := baseDirectory.value,
     assemblyMergeStrategy in assembly := {
       case PathList("org", "xmlpull", _ @ _*) => MergeStrategy.first
