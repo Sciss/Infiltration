@@ -37,7 +37,7 @@ object OptimizeWorkspace {
     val wsDir = file(args(0))
 
     Parametrize.init()
-//    Optimize.MAX_MEM_SIZE_MB = 128
+    Optimize.MAX_MEM_SIZE_MB = 64
 
     type S  = Durable
     val dsf = BerkeleyDB.factory(wsDir, createIfNecessary = false)
@@ -92,7 +92,7 @@ object OptimizeWorkspace {
     implicit val timer: Timer = new Timer
     import de.sciss.mellite.Mellite.executionContext
     import ws.cursor
-    val futAll = Parametrize.sequence(iterKeys) { iterIdx =>
+    val futAll = Parametrize.sequenceUnit(iterKeys) { iterIdx =>
       println(s"Iteration $iterIdx")
       val folderItH = cursor.step { implicit tx =>
         val folderOut = folderOutH()
@@ -102,7 +102,7 @@ object OptimizeWorkspace {
         tx.newHandle(folderIt)
       }
       val procs = iterMap(iterIdx)
-      Parametrize.sequence(procs) { procSpec =>
+      Parametrize.sequenceUnit(procs) { procSpec =>
         println(s"   ${procSpec.name}")
         val oCfg = Optimize.Config(
           graph         = procSpec.graph,
