@@ -18,7 +18,7 @@ lazy val deps = new {
   val negatum         = "0.15.5"
   val soundProcesses  = "3.35.8"
   val submin          = "0.3.4"
-//  val wolkenpumpe = "2.40.0"
+  val wolkenpumpe     = "2.41.1-SNAPSHOT"
 }
 
 lazy val root = project.in(file("."))
@@ -33,7 +33,7 @@ lazy val root = project.in(file("."))
       "de.sciss" %% "negatum-core"  % deps.negatum,
       "de.sciss" %% "soundprocesses-core"  % deps.soundProcesses,
       "de.sciss" %  "submin"        % deps.submin,
-//      "de.sciss" %% "wolkenpumpe"   % deps.wolkenpumpe,
+      "de.sciss" %% "wolkenpumpe"   % deps.wolkenpumpe,
     ),
     mainClass             in assembly := Some("de.sciss.infiltration.Main"),
     assemblyJarName       in assembly := "Infiltration.jar",
