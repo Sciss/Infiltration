@@ -15,11 +15,9 @@ package de.sciss.infiltration
 
 import de.sciss.lucre.stm.Sys
 import de.sciss.lucre.synth.InMemory
-import de.sciss.nuages.{DSL, ExpWarp, IntWarp, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
-import de.sciss.submin.Submin
-import de.sciss.synth.proc.Implicits._
-import de.sciss.synth.proc.graph.ScanInFix
-import de.sciss.synth.proc.{Proc, Universe}
+import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, NuagesAttribute, NuagesPanel, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
+//import de.sciss.submin.Submin
+import de.sciss.synth.proc.Universe
 import de.sciss.synth.ugen.{ControlValues, LinXFade2}
 import de.sciss.synth.{GE, Server, proc}
 
@@ -29,25 +27,41 @@ object RecordTopologies {
   def main(args: Array[String]): Unit = {
     Wolkenpumpe.init()
     Swing.onEDT {
-      Submin.install(true)
+//      Submin.install(true)
       run()
     }
   }
 
-  def dumpTopology[S <: Sys[S]](n: Nuages[S])(implicit tx: S#Tx): Unit = {
-    n.surface match {
-      case Nuages.Surface.Folder(f) =>
-        f.iterator.foreach {
-          case p: Proc[S] =>
-            println(p.name)
-
-          case other =>
-            println(s"(ignoring $other)")
+  def dumpTopology[S <: Sys[S]](np: NuagesPanel[S])(implicit tx: S#Tx): Unit = {
+    val n = np.nodes
+    n.foreach { p =>
+      println(p.name)
+      p.attributes.foreach { case (key, a) =>
+        val vec = a.inputView match {
+          case nm: NuagesAttribute.Numeric => Some(nm.numericValue)
+          case _ => None
         }
-
-      case Nuages.Surface.Timeline(_) =>
-        sys.error("Timeline not supported")
+        println(s"  < $key: ${Option(a.numericValue)} - ${a.spec} - $vec")
+      }
+      p.outputs.foreach { case (key, a) =>
+        println(s"  > $key: ${a.mappings}")
+      }
     }
+
+//    n.surface match {
+//      case Nuages.Surface.Folder(f) =>
+//        f.iterator.foreach {
+//          case p: Proc[S] =>
+//
+//            println(p.name)
+//
+//          case other =>
+//            println(s"(ignoring $other)")
+//        }
+//
+//      case Nuages.Surface.Timeline(_) =>
+//        sys.error("Timeline not supported")
+//    }
   }
 
   def any2stringadd(in: Any): Any = ()
@@ -62,8 +76,11 @@ object RecordTopologies {
         sCfg.genNumChannels = 4
         nCfg.mainChannels   = Some(0 until 4)
         nCfg.soloChannels   = None
-        nCfg.lineInputs     = Vector.empty
+        // we need one here so that the right number of input channels is chosen
+        nCfg.lineInputs     = Vector(NamedBusConfig("ignore", 0 until 2))
         nCfg.lineOutputs    = Vector.empty
+        nCfg.micInputs      = Vector.empty
+        aCfg.deviceName     = Some("Infiltration")
       }
 
       override protected def registerProcesses(nuages: Nuages[S], nCfg: Nuages.Config, sCfg: ScissProcs.Config)
@@ -74,7 +91,7 @@ object RecordTopologies {
         import dsl._
         import sCfg.genNumChannels
 
-        val mainChansOption = nCfg.mainChannels
+//        val mainChansOption = nCfg.mainChannels
 
         def ForceChan(in: GE): GE = if (genNumChannels <= 0) in else {
           Util.wrapExtendChannels(genNumChannels, in)
@@ -221,16 +238,44 @@ object RecordTopologies {
           val flt     = Select.ar(pMode, latch :: eg :: Nil)
           mix(in, flt, pMix)
         }
+
+        generator("in") {
+          import de.sciss.synth.ugen._
+          val pBoost  = pAudio("gain", ParamSpec(0.1, 10, ExpWarp), default(1.0))
+          val pBal    = pAudio("$bal", ParamSpec(-1.0, 1.0, LinWarp), default(0.0))
+          val sig0    = In.ar(NumOutputBuses.ir, 2)
+          val sig     = LeakDC.ar(sig0)
+          val sigL    = sig.out(0)
+          val sigR    = sig.out(1)
+          val balance = Balance2.ar(sigL, sigR, pos = pBal, level = pBoost)
+          val sum     = balance.left + balance.right
+          val buf     = LocalBuf(512, 1)
+          val fft     = FFT(buf, sum, hop = 1.0, winType = 1)
+          val loud    = Loudness.kr(fft)
+          loud.poll(1, "loud")
+          val sig1: GE = ForceChan(sum)
+          sig1
+        }
       }
     }
 
     val nuagesH = system.step { implicit tx => tx.newHandle(Nuages.folder[S]) }
     w.run(nuagesH)
+    w.view.panel.display.setHighQuality(false)
 
-    w.view.addSouthComponent(Button("Dump Topology") {
+    w.view.addSouthComponent(Button("Top") {
       system.step { implicit tx =>
-        dumpTopology(nuagesH())
+        dumpTopology(w.view.panel)
       }
+    })
+
+    w.view.addSouthComponent(Button("Sta") {
+      val cOpt = system.step { implicit tx =>
+        w.auralSystem.serverOption.map { s =>
+          s.counts
+        }
+      }
+      cOpt.foreach(println)
     })
   }
 }
