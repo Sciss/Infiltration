@@ -188,8 +188,25 @@ object MakeChains {
         }
       }
 
-      val tourMTot = tourM.map(endKeys.apply)
-      println(tourMTot)
+      val tourMTot: Vec[Int] = tourM.map(endKeys.apply)
+      println(tourMTot.mkString(","))
+      println()
+//      println("TOURS")
+//      tours.foreach(t => println(s"${t.head} ... ${t.last}"))
+
+      val allTour: Vec[Int] = tourMTot.grouped(2).flatMap {
+        case Seq(a, b) =>
+          println(s"searching for $a, $b")
+          val subOpt  = tours.collectFirst {
+            case t if t.head == a && t.last == b => t
+            case t if t.head == b && t.last == a => t.reverse
+          }
+          subOpt.getOrElse(sys.error(s"Oh noes! $a, $b"))
+      } .toVector
+
+      println(s"Total tour ${allTour.size}:")
+      allTour.grouped(20).foreach(tt => println(tt.mkString("", ",", ",")))
+
 //      cursor.step { implicit tx =>
 //        val tourObj   = IntVector.newVar[S](IntVector.newConst(tourMOff))
 //        tourObj.name  = "end-tour"
