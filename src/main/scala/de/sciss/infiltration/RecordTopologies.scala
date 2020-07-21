@@ -249,7 +249,7 @@ object RecordTopologies {
           val sigR    = sig.out(1)
           val balance = Balance2.ar(sigL, sigR, pos = pBal, level = pBoost)
           val sum     = balance.left + balance.right
-          val buf     = LocalBuf(512, 1)
+          val buf     = LocalBuf(1024, 1) // WARNING: must be 1024 for Loudness
           val fft     = FFT(buf, sum, hop = 1.0, winType = 1)
           val loud    = Loudness.kr(fft)
           loud.poll(1, "loud")
