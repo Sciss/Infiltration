@@ -24,7 +24,7 @@ import de.sciss.tsp.LinKernighan
 import org.rogach.scallop.{ScallopConf, ScallopOption => Opt}
 
 object MakeChains {
-  final case class Config(in: File)
+  final case class Config(in: File, tie: Boolean)
 
   def main(args: Array[String]): Unit = {
     object p extends ScallopConf(args) {
@@ -33,10 +33,14 @@ object MakeChains {
       val in: Opt[File] = opt(required = true,
         descr = "Existing input workspace to copy from"
       )
+      val tie: Opt[Boolean] = toggle(
+        descrYes = "Tie together the sub-chains", default = Some(false),
+      )
 
       verify()
       val config: Config = Config(
         in      = in(),
+        tie     = tie(),
       )
     }
 
@@ -49,52 +53,38 @@ object MakeChains {
     val dbIn  = BerkeleyDB.factory(wsInDir, createIfNecessary = false)
     val wsIn  = Workspace.Durable.read(wsInDir, dbIn)
     import wsIn.cursor
-    val folderNameIn    = "par"
+    val folderNamePar   = "par"
     val folderNameCorr  = "pairs"
-    val folderNameOut   = "lk"
+    val folderNameLK    = "lk"
+    val folderNameEnds  = "ends"
 //    val folderNameOut = "chain"
-    val (folderInH, folderCorrH, numChildren, numGroups0, folderOutH) = cursor.step { implicit tx =>
+    val (folderParH, folderCorrH, numChildren, numGroups0, folderLKH, folderEndsH) = cursor.step { implicit tx =>
       val r           = wsIn.root
-      val folderIn    = r.$[Folder](folderNameIn  ).getOrElse(sys.error(s"No folder '$folderNameIn' found"))
+      val folderPar   = r.$[Folder](folderNamePar  ).getOrElse(sys.error(s"No folder '$folderNamePar' found"))
       val folderCorr  = r.$[Folder](folderNameCorr).getOrElse(sys.error(s"No folder '$folderNameCorr' found"))
-      val folderOut   = r.$[Folder](folderNameOut).getOrElse {
+      val folderLK    = r.$[Folder](folderNameLK).getOrElse {
         val f = Folder[S]()
-        f.name = folderNameOut
+        f.name = folderNameLK
         r.addLast(f)
         f
       }
-      (tx.newHandle(folderIn), tx.newHandle(folderCorr), folderIn.size, folderCorr.size, tx.newHandle(folderOut))
+      val folderEnds   = r.$[Folder](folderNameEnds).getOrElse {
+        val f = Folder[S]()
+        f.name = folderNameEnds
+        r.addLast(f)
+        f
+      }
+      (tx.newHandle(folderPar), tx.newHandle(folderCorr), folderPar.size, folderCorr.size,
+        tx.newHandle(folderLK), tx.newHandle(folderEnds))
     }
 
-    val count = cursor.step { implicit tx =>
-      val fIn = folderInH()
-      fIn.iterator.foldLeft(0) {
-        case (acc, child: Folder[S]) => acc + child.size
-        case (acc, _) => acc
-      }
-    }
+    def runLK(m: Map[Int, Map[Int, Double]]): Vec[Int] = {
 
-    println(s"In ${wsInDir.name}, the number of children inside $numChildren sub-folders of '$folderNameIn' is $count")
-    val groupSize0  = math.sqrt(count)
-    val numGroups   = math.round(count / groupSize0).toInt
-    val groupSize   = count /*.toDouble*/ / numGroups
-    println(s"The grouping size is $groupSize; numGroups = $numGroups; corr folder has $numGroups0 elements")
-    require (numGroups == numGroups0)
-
-    var startIdx = 0
-    for (groupIdx <- 0 until numGroups) {
-      val (numVertices0, edges) = wsIn.cursor.step { implicit tx =>
-        readGraph[S](folderCorrH(), group = groupIdx)
-      }
-      println(s"numVertices = $numVertices0")  // 176
-      val m0: Map[Int, Map[Int, Double]] = mkEdgeCostMap(edges)
-      val m = m0.filterNot { case (_, values) =>
-        values.exists(_._2.isNaN)
-      }
-      val keysF       = m.keys.toVector.sorted
+//      val keysF       = m.keys.toVector.sorted
+      val keysF       = (m.keySet ++ m.values.flatMap(_.keySet).toSet).toVector.sorted
       val numVertices = keysF.size
-      println(s"$numVertices of $numVertices0 vertices are ok.")
-//      println(keysF)
+      println(s"---numVertices $numVertices")
+      //      println(keysF)
 
       val cost = Array.ofDim[Double](numVertices, numVertices)
       for (vi <- 0 until numVertices) {
@@ -121,16 +111,134 @@ object MakeChains {
       println(s"Optimized cost: ${lk.tourCost}")
       val tourM = lk.tour.map(keysF)
       println(tourM /*lk.tour*/.mkString(","))
-      val tourMOff = tourM.map(_ + startIdx)
+      tourM
+    }
 
-      cursor.step { implicit tx =>
-        val tourObj   = IntVector.newVar[S](IntVector.newConst(tourMOff))
-        tourObj.name  = s"tour-${groupIdx + 1}"
-        val folderOut = folderOutH()
-        folderOut.addLast(tourObj)
+    if (config.tie) {
+      // tours: total indices
+      // ends: zero based
+      val (tours, ends) = cursor.step { implicit tx =>
+        val folderLK = folderLKH()
+        val _tours = folderLK.iterator.collect {
+          case iv: IntVector[S] => iv.value
+        } .toVector
+
+        val folderEnds = folderEndsH()
+//        val _ends = folderEnds.headOption match {
+//          case Some(dv: DoubleVector[S]) => dv.value
+//          case _ => sys.error("Did not find 'ends'")
+//        }
+        val (_, _ends) = readGraph(folderEnds, 0)
+
+        (_tours, _ends)
+      }
+      val numTours  = tours.size
+      val numEnds   = 2 * numTours // for each tour, first and last element
+      // total
+      val endKeys   = tours.map(_.head) ++ tours.map(_.last) // tours.flatMap { t => t.head :: t.last :: Nil }
+      println(s"endsKeys.size ${endKeys.size}")
+      // from total to index
+      val endIdxMap = endKeys.zipWithIndex.toMap
+      println(s"Tours: $numTours; ${ends.size} = ${ends.size}")
+      require (numEnds * (numEnds - 1) / 2 == ends.size)
+      // zero based
+      val m0 = mkEdgeCostMap(ends)
+      val m0KeysSorted = m0.keys.toVector.sorted
+      println(s"KEYS: $m0KeysSorted")
+      assert (m0KeysSorted.size == endKeys.size - 1) // because the last node does not have a dictionary
+      // for each tour, assign minimum cost to (head, last) edges
+      val m = tours.foldLeft(m0) { case (mAcc, tour) =>
+        val headK = tour.head
+        val lastK = tour.last
+        val head  = endIdxMap(headK)
+        val last  = endIdxMap(lastK)
+
+//        println(s"headK $headK lastK $lastK head $head last $last")
+
+        def patch(in: Map[Int, Map[Int, Double]], v1: Int, v2: Int): Map[Int, Map[Int, Double]] = {
+//          in.get(v1).fold(in) { values0 =>
+            val values0 = in(v1)
+            assert (values0.contains(v2))
+            val values1 = values0 + (v2 -> -1.0) // zero cost
+            in + (v1 -> values1)
+//          }
+        }
+
+        val mP1 = patch(mAcc, head, last)
+        val mP2 = mP1 // patch(mP1 , last, head)
+        mP2
       }
 
-      startIdx += groupSize
+//      println(s"(43, 32): ${m(43)(32)}")
+
+      val tourM = runLK(m)
+      tours.foreach { tour =>
+        val headK = tour.head
+        val lastK = tour.last
+        val head  = endIdxMap(headK)
+        val last  = endIdxMap(lastK)
+        val hi    = tourM.indexOf(head)
+        val li    = tourM.indexOf(last)
+        require (hi >= 0, s"headK $headK head $head")
+        require (li >= 0, s"lastK $lastK last $last")
+        if (math.abs(hi - li) != 1) {
+          if (!((hi == 0 && li == tourM.size - 1) || (li == 0 && hi == tourM.size - 1))) {
+            println(s"Oops. $head ($hi) and $last ($li) are not neighbours.")
+          }
+        }
+      }
+
+      val tourMTot = tourM.map(endKeys.apply)
+      println(tourMTot)
+//      cursor.step { implicit tx =>
+//        val tourObj   = IntVector.newVar[S](IntVector.newConst(tourMOff))
+//        tourObj.name  = "end-tour"
+//        val folderOut = folderLKH()
+//        folderOut.addLast(tourObj)
+//      }
+
+    } else { // no 'tie'
+      val count = cursor.step { implicit tx =>
+        val fIn = folderParH()
+        fIn.iterator.foldLeft(0) {
+          case (acc, child: Folder[S]) => acc + child.size
+          case (acc, _) => acc
+        }
+      }
+
+      println(s"In ${wsInDir.name}, the number of children inside $numChildren sub-folders of '$folderNamePar' is $count")
+      val groupSize0  = math.sqrt(count)
+      val numGroups   = math.round(count / groupSize0).toInt
+      val groupSize   = count /*.toDouble*/ / numGroups
+      println(s"The grouping size is $groupSize; numGroups = $numGroups; corr folder has $numGroups0 elements")
+      require (numGroups == numGroups0)
+
+      var startIdx = 0
+      for (groupIdx <- 0 until numGroups) {
+        val (numVertices0, edges) = wsIn.cursor.step { implicit tx =>
+          readGraph[S](folderCorrH(), index = groupIdx)
+        }
+        println(s"numVertices = $numVertices0")  // 176
+        val m0: Map[Int, Map[Int, Double]] = mkEdgeCostMap(edges)
+        val m1 = m0.filterNot { case (_, values) =>
+          values.exists(_._2.isNaN)
+        }
+        println(s"${m1.size} of $numVertices0 vertices are ok.")
+        val m = m1.map { case (key, values) =>
+          val values1 = values.filter { case (target, _) => m1.contains(target) }
+          key -> values1
+        }
+        val tourM    = runLK(m)
+        val tourMOff = tourM.map(_ + startIdx)
+        cursor.step { implicit tx =>
+          val tourObj   = IntVector.newVar[S](IntVector.newConst(tourMOff))
+          tourObj.name  = s"tour-${groupIdx + 1}"
+          val folderOut = folderLKH()
+          folderOut.addLast(tourObj)
+        }
+
+        startIdx += groupSize
+      }
     }
 
     wsIn.close()
@@ -144,8 +252,8 @@ object MakeChains {
 
   final case class WEdge(source: Int, target: Int, weight: Double)
 
-  def readGraph[S <: Sys[S]](parent: Folder[S], group: Int)(implicit tx: S#Tx): (Int, Vec[WEdge]) = {
-    val b0 = parent.get(group) match {
+  def readGraph[S <: Sys[S]](parent: Folder[S], index: Int)(implicit tx: S#Tx): (Int, Vec[WEdge]) = {
+    val b0 = parent.get(index) match {
       case Some(dv: DoubleVector[S])  => dv.value
       case _                          => sys.error("Did not find vector")
     }
