@@ -42,3 +42,6 @@ Options are something like
 - `java -jar Infiltration.jar copy-folder --in NegatumTrunkNs.mllt --out TrunkNpar.mllt --folder out`
 - optimize
 - parametrize
+- remove-simple
+- copy `MakeChains-empty` into workspace that has `par` ("TrunkNparC.mllt"); set `par` in the controls
+- run 

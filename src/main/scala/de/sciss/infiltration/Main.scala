@@ -11,6 +11,7 @@ object Main {
     "negatum"         -> RunNegatum       .main,
     "trunk-to-sound"  -> TrunkToSoundSeq  .main,
     "play-chain"      -> PlayChain        .main,
+    "remove-simple"   -> RemoveSimpleProcs.main,
   )
 
   def main(args: Array[String]): Unit = {
