@@ -1,5 +1,5 @@
 /*
- *  CountObjects.scala
+ *  RemoveSimpleProcs.scala
  *  (in|filtration)
  *
  *  Copyright (c) 2019-2020 Hanns Holger Rutz. All rights reserved.
@@ -21,12 +21,12 @@ import de.sciss.synth.proc.Implicits._
 import de.sciss.synth.proc.{Durable, Proc, Workspace}
 import org.rogach.scallop.{ScallopConf, ScallopOption => Opt}
 
-object CountObjects {
+object RemoveSimpleProcs {
   final case class Config(in: File, folder: String)
 
   def main(args: Array[String]): Unit = {
     object p extends ScallopConf(args) {
-      printedName = "CountObjects"
+      printedName = "RemoveSimpleProcs"
 
       val in: Opt[File] = opt(required = true,
         descr = "Existing input workspace to copy from"
@@ -60,11 +60,15 @@ object CountObjects {
       val fIn = folderInH()
       fIn.iterator.foldLeft((0, 0)) {
         case ((acc1, acc2), child: Folder[S]) =>
-          val numOk = child.iterator.count {
-            case p: Proc[S] if p.attr.$[DoubleVector]("p2").isDefined => true
-            case _ => false
+          var numOk   = 0
+          val oldSize = child.size
+          child.iterator.toList.foreach {
+            case p: Proc[S] if p.attr.$[DoubleVector]("p2").isDefined =>
+              numOk += 1
+            case p =>
+              child.remove(p)
           }
-          (acc1 + child.size, (acc2 + numOk))
+          (acc1 + oldSize, (acc2 + numOk))
         case (acc, _) => acc
       }
     }

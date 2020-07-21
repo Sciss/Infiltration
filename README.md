@@ -34,3 +34,11 @@ When using `run.sh`, a RAM disk must have been created:
 Options are something like
 
     --workspace /data/projects/Infiltration/workspaces/NegatumTrunk11.mllt --template /data/projects/Infiltration/audio_work/trunk11/trunk_47e8301c-%d-hilbert-curve.aif --end-frame 500 --gen-population 800
+
+## Ordering
+
+- negatum
+- `java -Djava.io.tmpdir=/tmp/ramdisk -jar Mellite.jar -r Tweak,Select --headless NegatumTrunkNs.mllt`
+- `java -jar Infiltration.jar copy-folder --in NegatumTrunkNs.mllt --out TrunkNpar.mllt --folder out`
+- optimize
+- parametrize

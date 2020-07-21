@@ -22,7 +22,7 @@ import de.sciss.mellite.Mellite
 import de.sciss.numbers
 import de.sciss.osc.Message
 import de.sciss.synth.proc.Implicits._
-import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, Runner, SoundProcesses, Universe, Workspace}
+import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, Runner, SoundProcesses, TimeRef, Universe, Workspace}
 import de.sciss.synth.{SynthGraph, addToTail, message}
 
 import scala.concurrent.stm.Ref
@@ -53,7 +53,7 @@ object PlayChain {
     println(s"numProcs = $numProcs")
 
     implicit val u: Universe[S] = _universe
-//    val sch = u.scheduler
+    val sch = u.scheduler
 
 //    val procIdxR  = Ref(247)
 //    val procIdxR = Ref(256)
@@ -62,7 +62,7 @@ object PlayChain {
 //    val procIdxR = Ref(271)
 //    val procIdxR = Ref(280)
 //    val procIdxR = Ref(285)
-    val procIdxR = Ref(291)
+    val procIdxR = Ref(311)
 
 //    val runnerR   = Ref(List.empty[Runner[S]])
 
@@ -91,54 +91,65 @@ object PlayChain {
 //    }
 
     def play(server: Server)(implicit tx: S#Tx): Unit = {
-      val g     = circleH()
-      val procIdx = procIdxR()
+      def bla()(implicit tx: S#Tx): Unit = {
+        val g     = circleH()
+        //      val procIdx = procIdxR()
+        val procIdx = procIdxR.getAndTransform(_ + 1) % numProcs
 
-      val proc  = g.at(procIdx).getOrElse(sys.error("Woopa")).value
-      println(s"play($procIdx) = ${proc.name}")
-      val r     = Runner(proc)
-      r.run()
+        val proc  = g.at(procIdx).getOrElse(sys.error("Woopa")).value
+        println(s"play($procIdx) = ${proc.name}")
+        val r     = Runner(proc)
+        r.run()
 
-      val gPeak = SynthGraph {
-        import de.sciss.synth.ugen._
-        val sig   = Mix.mono(In.ar(0, 4))
-        val tr    = Impulse.kr(0.5)
-        val peak  = Peak.kr(sig, tr)
-//        peak.ampDb.poll(tr, "peak")
-        val trS   = tr - Impulse.kr(0)  // ignore single initial peak
-        SendReply.kr(trS, peak, "/$meter")
-      }
-      val synPeak = Synth.play(gPeak)(target = server.defaultGroup, addAction = addToTail)
-      val SynPeakId = synPeak.peer.id
-//      val gainR = Ref(1.0)
+        val gPeak = SynthGraph {
+          import de.sciss.synth.ugen._
+          val sig   = Mix.mono(In.ar(0, 4))
+          val tr    = Impulse.kr(0.5)
+          val peak  = Peak.kr(sig, tr)
+  //        peak.ampDb.poll(tr, "peak")
+          val trS   = tr - Impulse.kr(0)  // ignore single initial peak
+          SendReply.kr(trS, peak, "/$meter")
+        }
+        val synPeak = Synth.play(gPeak)(target = server.defaultGroup, addAction = addToTail)
+        val SynPeakId = synPeak.peer.id
+  //      val gainR = Ref(1.0)
 
-//      val peakCount = Ref(0)
+  //      val peakCount = Ref(0)
 
-      lazy val respPeak: message.Responder = message.Responder.add(synPeak.server.peer) {
-        case Message("/$meter", SynPeakId, _, vals @ _*) =>
-          val pairs = vals.asInstanceOf[Seq[Float]].toIndexedSeq
-          val peak  = pairs.head
-          import numbers.Implicits._
-          println(s"peak = ${peak.ampDb} dB")
-          if (peak < -30.dbAmp) {
-//            s.peer.dumpTree(true)
-            cursor.step { implicit tx =>
-              val r = math.random()
-//              val g = gainR.transformAndGet(_ * 1.5)
-//              server.defaultGroup.set(s"$$at_gain" -> g)
-              val parIdx = if (math.random() < 0.5) 1 else 2
-              server.defaultGroup.set(s"$$at_p$parIdx" -> Vector.fill(4)(r.toFloat))
+        lazy val respPeak: message.Responder = message.Responder.add(synPeak.server.peer) {
+          case Message("/$meter", SynPeakId, _, vals @ _*) =>
+            val pairs = vals.asInstanceOf[Seq[Float]].toIndexedSeq
+            val peak  = pairs.head
+            import numbers.Implicits._
+            println(s"peak = ${peak.ampDb} dB")
+            if (peak < -30.dbAmp) {
+  //            s.peer.dumpTree(true)
+              cursor.step { implicit tx =>
+                val r = math.random()
+  //              val g = gainR.transformAndGet(_ * 1.5)
+  //              server.defaultGroup.set(s"$$at_gain" -> g)
+                val parIdx = if (math.random() < 0.5) 1 else 2
+                server.defaultGroup.set(s"$$at_p$parIdx" -> Vector.fill(4)(r.toFloat))
+              }
+            } else {
+              cursor.step { implicit tx =>
+                synPeak.free()
+              }
+              respPeak.remove()
             }
-          } else {
-            cursor.step { implicit tx =>
-              synPeak.free()
-            }
-            respPeak.remove()
-          }
+        }
+        respPeak
+        afterRollback(_ => respPeak.remove())(tx.peer)
+        synPeak.onEnd(respPeak.remove())
+
+        sch.schedule(sch.time + (TimeRef.SampleRate * 8).toLong) { implicit tx =>
+          r.dispose()
+          synPeak.free()
+          bla()
+        }
       }
-      respPeak
-      afterRollback(_ => respPeak.remove())(tx.peer)
-      synPeak.onEnd(respPeak.remove())
+
+      bla()
 
       val gLoud = SynthGraph {
         import de.sciss.synth.ugen._
@@ -166,9 +177,9 @@ object PlayChain {
         val peak  = Peak.kr(loud + flat/*.clip(0.0, 0.5)*/.linLin(0.0, 0.5, 36, 0.0), tr)
         val trS   = tr - Impulse.kr(0)  // ignore single initial peak
         SendReply.kr(trS, peak, "/$loud")
-//        ReplaceOut.ar(0, Limiter.ar(in * mG))
         val inG = in * mG
-        ReplaceOut.ar(0, Limiter.ar(Seq(inG.out(0) + inG.out(2), inG.out(1) + inG.out(3))))
+//        ReplaceOut.ar(0, Limiter.ar(Seq(inG.out(0) + inG.out(2), inG.out(1) + inG.out(3))))
+        ReplaceOut.ar(0, Limiter.ar(inG))
       }
       val synLoud = Synth.play(gLoud)(target = server.defaultGroup, addAction = addToTail, dependencies = /*bLoud ::*/ Nil)
       val SynLoudId = synLoud.peer.id
@@ -190,7 +201,7 @@ object PlayChain {
             }
           } else if (loud > 60) {
             cursor.step { implicit tx =>
-              val g = mainGainR.transformAndGet(_ * (-2.0).dbAmp)
+              val g = mainGainR.transformAndGet(_ * (-3.0).dbAmp)
               if (g > -36.dbAmp) {
                 server.defaultGroup.set("main-gain" -> g)
               }

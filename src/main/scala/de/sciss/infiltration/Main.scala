@@ -10,6 +10,7 @@ object Main {
     "topologies"      -> RecordTopologies .main,
     "negatum"         -> RunNegatum       .main,
     "trunk-to-sound"  -> TrunkToSoundSeq  .main,
+    "play-chain"      -> PlayChain        .main,
   )
 
   def main(args: Array[String]): Unit = {
