@@ -15,11 +15,11 @@ package de.sciss.infiltration
 
 import de.sciss.file._
 import de.sciss.kollflitz.Vec
-import de.sciss.lucre.expr.{DoubleVector, IntVector}
+import de.sciss.lucre.expr.{DoubleVector, IntVector, LongObj}
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.stm.{Folder, Sys}
 import de.sciss.synth.proc.Implicits._
-import de.sciss.synth.proc.{Durable, Workspace}
+import de.sciss.synth.proc.{Durable, Grapheme, Proc, Workspace}
 import de.sciss.tsp.LinKernighan
 import org.rogach.scallop.{ScallopConf, ScallopOption => Opt}
 
@@ -213,6 +213,30 @@ object MakeChains {
 //        val folderOut = folderLKH()
 //        folderOut.addLast(tourObj)
 //      }
+
+      println("Creating grapheme...")
+
+      cursor.step { implicit tx =>
+        val g         = Grapheme[S]()
+        g.name        = "circle"
+        val folderPar = folderParH()
+        val allProcs  = folderPar.iterator.flatMap {
+          case sub: Folder[S] => sub.iterator.collect {
+            case p: Proc[S] => p
+          }
+        } .toVector
+        allTour.zipWithIndex.foreach { case (procIdx, gi) =>
+          val giObj = LongObj.newConst(gi.toLong)
+          val proc  = allProcs(procIdx)
+          g.add(giObj, proc)
+        }
+        wsIn.root.addLast(g)
+      }
+
+      println("Voilà")
+
+      //////////////////////////////////////////////////
+
 
     } else { // no 'tie'
       val count = cursor.step { implicit tx =>
