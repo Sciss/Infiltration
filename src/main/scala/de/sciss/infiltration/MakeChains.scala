@@ -24,7 +24,7 @@ import de.sciss.tsp.LinKernighan
 import org.rogach.scallop.{ScallopConf, ScallopOption => Opt}
 
 object MakeChains {
-  final case class Config(in: File, tie: Boolean)
+  final case class Config(in: File, tie: Boolean, tieStrength: Double, tieDistance: Double)
 
   def main(args: Array[String]): Unit = {
     object p extends ScallopConf(args) {
@@ -36,11 +36,19 @@ object MakeChains {
       val tie: Opt[Boolean] = toggle(
         descrYes = "Tie together the sub-chains", default = Some(false),
       )
+      val tieStrength: Opt[Double] = opt(name = "tie-strength",
+        descr = "Strength within sub-chains ends to avoid breaking them apart", default = Some(1.0),
+      )
+      val tieDistance: Opt[Double] = opt(name = "tie-distance",
+        descr = "Additional distance within sub-chains to avoid breaking them apart", default = Some(0.0),
+      )
 
       verify()
       val config: Config = Config(
-        in      = in(),
-        tie     = tie(),
+        in          = in(),
+        tie         = tie(),
+        tieStrength = tieStrength(),
+        tieDistance = tieDistance(),
       )
     }
 
@@ -128,7 +136,7 @@ object MakeChains {
 //          case Some(dv: DoubleVector[S]) => dv.value
 //          case _ => sys.error("Did not find 'ends'")
 //        }
-        val (_, _ends) = readGraph(folderEnds, 0)
+        val (_, _ends) = readGraph(folderEnds, index = 0, addCost = config.tieDistance)
 
         (_tours, _ends)
       }
@@ -159,7 +167,7 @@ object MakeChains {
 //          in.get(v1).fold(in) { values0 =>
             val values0 = in(v1)
             assert (values0.contains(v2))
-            val values1 = values0 + (v2 -> -1.0) // zero cost
+            val values1 = values0 + (v2 -> (-config.tieStrength)) // zero cost
             in + (v1 -> values1)
 //          }
         }
@@ -249,15 +257,19 @@ object MakeChains {
 
       println(s"In ${wsInDir.name}, the number of children inside $numChildren sub-folders of '$folderNamePar' is $count")
       val groupSize0  = math.sqrt(count)
-      val numGroups   = math.round(count / groupSize0).toInt
-      val groupSize   = count /*.toDouble*/ / numGroups
-      println(s"The grouping size is $groupSize; numGroups = $numGroups; corr folder has $numGroups0 elements")
-      require (numGroups == numGroups0)
+      val numGroups1  = math.round(count / groupSize0).toInt
+      val groupSize   = count /*.toDouble*/ / numGroups1
+      println(s"The grouping size is $groupSize; numGroups = $numGroups1; corr folder has $numGroups0 elements")
+      require (numGroups1 >= numGroups0)
+      if (numGroups1 > numGroups0) {
+        println(s"Warning: there are less correlation tours ($numGroups0) than expected ($numGroups1)")
+      }
+      val numGroups = math.min(numGroups0, numGroups1)
 
       var startIdx = 0
       for (groupIdx <- 0 until numGroups) {
         val (numVertices0, edges) = wsIn.cursor.step { implicit tx =>
-          readGraph[S](folderCorrH(), index = groupIdx)
+          readGraph[S](folderCorrH(), index = groupIdx, addCost = 0.0)
         }
         println(s"numVertices = $numVertices0")  // 176
         val m0: Map[Int, Map[Int, Double]] = mkEdgeCostMap(edges)
@@ -293,7 +305,7 @@ object MakeChains {
 
   final case class WEdge(source: Int, target: Int, weight: Double)
 
-  def readGraph[S <: Sys[S]](parent: Folder[S], index: Int)(implicit tx: S#Tx): (Int, Vec[WEdge]) = {
+  def readGraph[S <: Sys[S]](parent: Folder[S], index: Int, addCost: Double)(implicit tx: S#Tx): (Int, Vec[WEdge]) = {
     val b0 = parent.get(index) match {
       case Some(dv: DoubleVector[S])  => dv.value
       case _                          => sys.error("Did not find vector")
@@ -306,7 +318,7 @@ object MakeChains {
 //      val w = 1.0 - b0(i) // high correlation = low cost
       val w = 1.0 - math.sqrt(b0(i)) // high correlation = low cost
       i += 1
-      WEdge(a, b, w)
+      WEdge(a, b, w + addCost)
     }
     (numVertices, edges)
   }

@@ -12,6 +12,7 @@ object Main {
     "trunk-to-sound"  -> TrunkToSoundSeq  .main,
     "play-chain"      -> PlayChain        .main,
     "remove-simple"   -> RemoveSimpleProcs.main,
+    "make-chains"     -> MakeChains       .main,
   )
 
   def main(args: Array[String]): Unit = {

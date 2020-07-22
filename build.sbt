@@ -13,12 +13,12 @@ lazy val commonSettings = Seq(
 
 lazy val deps = new {
   val fscape          = "2.36.1"
-  val lucre           = "3.17.4"
+  val lucre           = "3.17.5"
   val melliteApp      = "2.48.2"
-  val negatum         = "0.15.6-SNAPSHOT"
+  val negatum         = "0.15.5"
   val soundProcesses  = "3.35.8"
   val submin          = "0.3.4"
-  val wolkenpumpe     = "2.41.1-SNAPSHOT"
+  val wolkenpumpe     = "2.41.1"
 }
 
 lazy val root = project.in(file("."))
