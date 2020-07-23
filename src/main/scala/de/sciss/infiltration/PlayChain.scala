@@ -62,7 +62,7 @@ object PlayChain {
 //    val procIdxR = Ref(271)
 //    val procIdxR = Ref(280)
 //    val procIdxR = Ref(285)
-    val procIdxR = Ref(311)
+    val procIdxR = Ref(444)
 
 //    val runnerR   = Ref(List.empty[Runner[S]])
 
@@ -109,6 +109,7 @@ object PlayChain {
   //        peak.ampDb.poll(tr, "peak")
           val trS   = tr - Impulse.kr(0)  // ignore single initial peak
           SendReply.kr(trS, peak, "/$meter")
+
         }
         val synPeak = Synth.play(gPeak)(target = server.defaultGroup, addAction = addToTail)
         val SynPeakId = synPeak.peer.id
@@ -151,7 +152,7 @@ object PlayChain {
 
       bla()
 
-      val gLoud = SynthGraph {
+      lazy val gLoudOLD = SynthGraph {
         import de.sciss.synth.ugen._
         import de.sciss.synth.Ops.stringToControl
         val mG0   = "main-gain".kr(1.0)
@@ -181,6 +182,33 @@ object PlayChain {
 //        ReplaceOut.ar(0, Limiter.ar(Seq(inG.out(0) + inG.out(2), inG.out(1) + inG.out(3))))
         ReplaceOut.ar(0, Limiter.ar(inG))
       }
+
+      val gLoud = SynthGraph {
+        import de.sciss.synth.ugen._
+        import de.sciss.synth.Ops.stringToControl
+        val in0 = In.ar(0, 4)
+        val in  = Mix.mono(in0)
+        CheckBadValues.ar(in)
+        val b1  = BPF.ar(in, freq =  333, rq = 1)
+        val b2  = BPF.ar(in, freq = 1000, rq = 1)
+        val b3  = BPF.ar(in, freq = 3000, rq = 1)
+        val r1  = Decay.kr(b1.abs, 0.2)
+        val r2  = Decay.kr(b2.abs, 0.2)
+        val r3  = Decay.kr(b3.abs, 0.2)
+        r1.ampDb.poll(1, "r1")
+        r2.ampDb.poll(1, "r2")
+        r3.ampDb.poll(1, "r3")
+        val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 10).min(8.0 /*4.0*/)
+        val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1)
+        //val gain = Lag.kr(gainF, 1.0).min(4.0)
+        gain.ampDb.poll(1, "gain")
+        val sig = Limiter.ar(in0 * gain)
+        ReplaceOut.ar(0, sig) // in0 /* DelayN.ar(in0, 0.2, 0.2) */ * gain)
+        //r1.poll(1, "r1")
+        //r2.poll(1, "r2")
+
+      }
+
       val synLoud = Synth.play(gLoud)(target = server.defaultGroup, addAction = addToTail, dependencies = /*bLoud ::*/ Nil)
       val SynLoudId = synLoud.peer.id
 
