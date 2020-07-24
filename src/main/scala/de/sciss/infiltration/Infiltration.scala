@@ -1,5 +1,5 @@
 /*
- *  RecordTopologies.scala
+ *  Infiltration.scala
  *  (in|filtration)
  *
  *  Copyright (c) 2019-2020 Hanns Holger Rutz. All rights reserved.
@@ -14,21 +14,18 @@
 package de.sciss.infiltration
 
 import de.sciss.lucre.stm.Sys
-import de.sciss.lucre.synth.InMemory
+import de.sciss.lucre.synth.{InMemory, Server, Synth, Txn}
 import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, NuagesAttribute, NuagesPanel, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
-import de.sciss.synth.ugen.{CheckBadValues, Gate, HPF, Out}
-//import de.sciss.submin.Submin
-import de.sciss.synth.proc.Universe
-import de.sciss.synth.ugen.{ControlValues, LinXFade2}
-import de.sciss.synth.{GE, Server, proc}
+import de.sciss.synth.proc.{AuralSystem, Universe}
+import de.sciss.synth.ugen.{CheckBadValues, ControlValues, Gate, HPF, LinXFade2, Out}
+import de.sciss.synth.{GE, SynthGraph, addAfter, proc, Server => SServer}
 
 import scala.swing.{Button, Swing}
 
-object RecordTopologies {
+object Infiltration {
   def main(args: Array[String]): Unit = {
     Wolkenpumpe.init()
     Swing.onEDT {
-//      Submin.install(true)
       run()
     }
   }
@@ -49,20 +46,20 @@ object RecordTopologies {
       }
     }
 
-//    n.surface match {
-//      case Nuages.Surface.Folder(f) =>
-//        f.iterator.foreach {
-//          case p: Proc[S] =>
-//
-//            println(p.name)
-//
-//          case other =>
-//            println(s"(ignoring $other)")
-//        }
-//
-//      case Nuages.Surface.Timeline(_) =>
-//        sys.error("Timeline not supported")
-//    }
+    //    n.surface match {
+    //      case Nuages.Surface.Folder(f) =>
+    //        f.iterator.foreach {
+    //          case p: Proc[S] =>
+    //
+    //            println(p.name)
+    //
+    //          case other =>
+    //            println(s"(ignoring $other)")
+    //        }
+    //
+    //      case Nuages.Surface.Timeline(_) =>
+    //        sys.error("Timeline not supported")
+    //    }
   }
 
   def any2stringadd(in: Any): Any = ()
@@ -72,7 +69,7 @@ object RecordTopologies {
     implicit val system: S = InMemory()
     val w: WolkenpumpeMain[S] = new WolkenpumpeMain[S] {
       override protected def configure(sCfg: ScissProcs.ConfigBuilder, nCfg: Nuages.ConfigBuilder,
-                                       aCfg: Server.ConfigBuilder): Unit = {
+                                       aCfg: SServer.ConfigBuilder): Unit = {
         super.configure(sCfg, nCfg, aCfg)
         sCfg.genNumChannels = 4
         nCfg.mainChannels   = Some(0 until 4)
@@ -81,6 +78,7 @@ object RecordTopologies {
         nCfg.lineInputs     = Vector(NamedBusConfig("ignore", 0 until 2))
         nCfg.lineOutputs    = Vector.empty
         nCfg.micInputs      = Vector.empty
+        nCfg.mainSynth      = false
         aCfg.deviceName     = Some("Infiltration")
       }
 
@@ -92,7 +90,7 @@ object RecordTopologies {
         import dsl._
         import sCfg.genNumChannels
 
-//        val mainChansOption = nCfg.mainChannels
+        //        val mainChansOption = nCfg.mainChannels
 
         def ForceChan(in: GE): GE = if (genNumChannels <= 0) in else {
           Util.wrapExtendChannels(genNumChannels, in)
@@ -118,7 +116,7 @@ object RecordTopologies {
         generator("negatum-3f704ff8") {
           import de.sciss.synth.ugen._
 
-//          shortcut = "N"
+          //          shortcut = "N"
           val freq_0  = pAudio("p1", ParamSpec( 13.122, 1.73999104e8, ExpWarp), default(1.73999104e8))
           val freq_1  = pAudio("p2", ParamSpec(-13.122, 22050.0     , LinWarp), default( 0.14800115))
           val in_6    = pAudio("p3", ParamSpec( -0.81 ,     2.05    , LinWarp), default(-0.29881296))
@@ -231,7 +229,7 @@ object RecordTopologies {
         filterF("s+hT") { in =>
           import de.sciss.synth.ugen._
 
-//          val pTrig   = pAudioIn("in_t")
+          //          val pTrig   = pAudioIn("in_t")
           val pTrig   = pAudio("trig" , ParamSpec(0.0, 1.0), default(0.0))
           val pMode   = pAudio("mode" , ParamSpec(0.0, 1.0, IntWarp), default(0.0))
           val pMix    = mkMix()
@@ -274,8 +272,7 @@ object RecordTopologies {
 
         collectorF("O-inf") { in =>
           import de.sciss.synth.ugen._
-          import de.sciss.synth.Ops.stringToControl
-//          val in0 = In.ar(0, 4)
+          //          val in0 = In.ar(0, 4)
           val inM = Mix.mono(in)
           CheckBadValues.ar(inM)
           val b1  = BPF.ar(inM, freq =  333, rq = 1)
@@ -284,17 +281,17 @@ object RecordTopologies {
           val r1  = Decay.kr(b1.abs, 0.2)
           val r2  = Decay.kr(b2.abs, 0.2)
           val r3  = Decay.kr(b3.abs, 0.2)
-//          r1.ampDb.poll(1, "r1")
-//          r2.ampDb.poll(1, "r2")
-//          r3.ampDb.poll(1, "r3")
+          //          r1.ampDb.poll(1, "r1")
+          //          r2.ampDb.poll(1, "r2")
+          //          r3.ampDb.poll(1, "r3")
           val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 10).min(8.0 /*4.0*/)
           val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1)
           //val gain = Lag.kr(gainF, 1.0).min(4.0)
-//          gain.ampDb.poll(1, "gain")
+          //          gain.ampDb.poll(1, "gain")
           val inG = in * gain
           val sig = inG // Limiter.ar(inG)
-//          ReplaceOut.ar(0, sig) // in0 /* DelayN.ar(in0, 0.2, 0.2) */ * gain)
-//          Out.ar(0, sig)
+          //          ReplaceOut.ar(0, sig) // in0 /* DelayN.ar(in0, 0.2, 0.2) */ * gain)
+          //          Out.ar(0, sig)
           mkDirectOut(sig)
           //r1.poll(1, "r1")
           //r2.poll(1, "r2")
@@ -302,17 +299,21 @@ object RecordTopologies {
       }
     }
 
-    val nuagesH = system.step { implicit tx => tx.newHandle(Nuages.folder[S]) }
+    val nuagesH = system.step { implicit tx =>
+      tx.newHandle(Nuages.folder[S])
+    }
     w.run(nuagesH)
-    w.view.panel.display.setHighQuality(false)
+    val view  = w.view
+    val panel = view.panel
+    panel.display.setHighQuality(false)
 
-    w.view.addSouthComponent(Button("Top") {
+    view.addSouthComponent(Button("Top") {
       system.step { implicit tx =>
         dumpTopology(w.view.panel)
       }
     })
 
-    w.view.addSouthComponent(Button("Sta") {
+    view.addSouthComponent(Button("Sta") {
       val cOpt = system.step { implicit tx =>
         w.auralSystem.serverOption.map { s =>
           s.counts
@@ -320,5 +321,40 @@ object RecordTopologies {
       }
       cOpt.foreach(println)
     })
+
+    system.step { implicit tx =>
+      w.auralSystem.addClientNow(new AuralSystem.Client {
+        def auralStarted(server: Server)(implicit tx: Txn): Unit = {
+          val dfPostM = SynthGraph {
+            import de.sciss.synth._
+            import de.sciss.synth.ugen._
+//            val nConfig     = panel.config
+            import Ops._
+            val amp   = "amp".kr(1f)
+            val in0   = In.ar(0, 4)
+            val in  = Mix.mono(in0)
+            CheckBadValues.ar(in)
+            val b1  = BPF.ar(in, freq =  333, rq = 1)
+            val b2  = BPF.ar(in, freq = 1000, rq = 1)
+            val b3  = BPF.ar(in, freq = 3000, rq = 1)
+            val r1  = Decay.kr(b1.abs, 0.2)
+            val r2  = Decay.kr(b2.abs, 0.2)
+            val r3  = Decay.kr(b3.abs, 0.2)
+//            r1.ampDb.poll(1, "r1")
+//            r2.ampDb.poll(1, "r2")
+//            r3.ampDb.poll(1, "r3")
+            val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 10).min(8.0 /*4.0*/)
+            val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1) * amp
+//            gain.ampDb.poll(1, "gain")
+            val sig = Limiter.ar(in0 * gain)
+            ReplaceOut.ar(0, sig)
+          }
+          val synPostM = Synth.play(dfPostM, Some("post-main"))(server.defaultGroup, addAction = addAfter)
+          panel.mainSynth = Some(synPostM)
+        }
+
+        def auralStopped()(implicit tx: Txn): Unit = ()
+      })
+    }
   }
 }

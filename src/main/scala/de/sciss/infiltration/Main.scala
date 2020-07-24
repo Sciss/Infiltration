@@ -2,6 +2,7 @@ package de.sciss.infiltration
 
 object Main {
   val map: Map[String, Array[String] => Unit] = Map(
+    "infiltration"    -> Infiltration     .main,
     "copy-folder"     -> CopyFolder       .main,
     "hilbert-curve"   -> HilbertCurveTest .main,
     "optimize-test"   -> OptimizeTest     .main,

@@ -17,7 +17,7 @@ import de.sciss.file._
 import de.sciss.lucre.stm
 import de.sciss.lucre.stm.TxnLike.peer
 import de.sciss.lucre.stm.store.BerkeleyDB
-import de.sciss.lucre.synth.{Buffer, Server, Synth, Txn}
+import de.sciss.lucre.synth.{Server, Synth, Txn}
 import de.sciss.mellite.Mellite
 import de.sciss.numbers
 import de.sciss.osc.Message
@@ -152,40 +152,39 @@ object PlayChain {
 
       bla()
 
-      lazy val gLoudOLD = SynthGraph {
-        import de.sciss.synth.ugen._
-        import de.sciss.synth.Ops.stringToControl
-        val mG0   = "main-gain".kr(1.0)
-        val mG    = Lag.kr(mG0, 10.0f)
-        val in    = In.ar(0, 4)
-        val sig   = Mix.mono(in)
-        val sigM  = (sig * mG).clip2(1.0) // .max(-1.0).min(1.0)
-//        CheckBadValues.ar(sigM)
-        Lag.kr(sigM.abs.ampDb, 1.0).poll(2, "lag")
-        val b     = LocalBuf(1024, 1)
-        val fft   = FFT(b, HPF.ar(sigM, 100), /*hop = 1.0,*/ winType = 1)
-        val loud  = Loudness.kr(fft) // , tmask = 6.0)
-        val flat0 = SpecFlatness.kr(fft)
-//        val flat1 = CheckBadValues.kr(flat0, post = 0)
-//        val flat  = Gate.kr(flat0, flat1 sig_== 0)
-        val flat = flat0.clip(0.0, 0.5)
-//        loud.poll(3)
-        Lag.kr(flat, 1.0).poll(1, "flat")
-        val tr    = Impulse.kr(0.5)
-//        val peak  = Peak.kr(loud / flat.max(0.01), tr)
-//        val peak  = Peak.kr(loud * (2.0 - flat).pow(1.41), tr)
-//        val peak  = Peak.kr(loud + (1.0 - flat) * 40, tr)
-        val peak  = Peak.kr(loud + flat/*.clip(0.0, 0.5)*/.linLin(0.0, 0.5, 36, 0.0), tr)
-        val trS   = tr - Impulse.kr(0)  // ignore single initial peak
-        SendReply.kr(trS, peak, "/$loud")
-        val inG = in * mG
-//        ReplaceOut.ar(0, Limiter.ar(Seq(inG.out(0) + inG.out(2), inG.out(1) + inG.out(3))))
-        ReplaceOut.ar(0, Limiter.ar(inG))
-      }
+//      lazy val gLoudOLD = SynthGraph {
+//        import de.sciss.synth.Ops.stringToControl
+//        import de.sciss.synth.ugen._
+//        val mG0   = "main-gain".kr(1.0)
+//        val mG    = Lag.kr(mG0, 10.0f)
+//        val in    = In.ar(0, 4)
+//        val sig   = Mix.mono(in)
+//        val sigM  = (sig * mG).clip2(1.0) // .max(-1.0).min(1.0)
+////        CheckBadValues.ar(sigM)
+//        Lag.kr(sigM.abs.ampDb, 1.0).poll(2, "lag")
+//        val b     = LocalBuf(1024, 1)
+//        val fft   = FFT(b, HPF.ar(sigM, 100), /*hop = 1.0,*/ winType = 1)
+//        val loud  = Loudness.kr(fft) // , tmask = 6.0)
+//        val flat0 = SpecFlatness.kr(fft)
+////        val flat1 = CheckBadValues.kr(flat0, post = 0)
+////        val flat  = Gate.kr(flat0, flat1 sig_== 0)
+//        val flat = flat0.clip(0.0, 0.5)
+////        loud.poll(3)
+//        Lag.kr(flat, 1.0).poll(1, "flat")
+//        val tr    = Impulse.kr(0.5)
+////        val peak  = Peak.kr(loud / flat.max(0.01), tr)
+////        val peak  = Peak.kr(loud * (2.0 - flat).pow(1.41), tr)
+////        val peak  = Peak.kr(loud + (1.0 - flat) * 40, tr)
+//        val peak  = Peak.kr(loud + flat/*.clip(0.0, 0.5)*/.linLin(0.0, 0.5, 36, 0.0), tr)
+//        val trS   = tr - Impulse.kr(0)  // ignore single initial peak
+//        SendReply.kr(trS, peak, s"/$$loud")
+//        val inG = in * mG
+////        ReplaceOut.ar(0, Limiter.ar(Seq(inG.out(0) + inG.out(2), inG.out(1) + inG.out(3))))
+//        ReplaceOut.ar(0, Limiter.ar(inG))
+//      }
 
       val gLoud = SynthGraph {
         import de.sciss.synth.ugen._
-        import de.sciss.synth.Ops.stringToControl
         val in0 = In.ar(0, 4)
         val in  = Mix.mono(in0)
         CheckBadValues.ar(in)
