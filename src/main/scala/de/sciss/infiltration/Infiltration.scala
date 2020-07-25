@@ -183,6 +183,7 @@ object Infiltration {
         nCfg.lineOutputsSplay = false
 //        nCfg.mainSynth      = false
         nCfg.mainSynth      = true
+        nCfg.showTransport  = false
         aCfg.deviceName     = Some("Infiltration")
       }
 
@@ -310,9 +311,12 @@ object Infiltration {
           val pGain = pAudio("gain" , ParamSpec(-30, 30), default(0.0))
           val pMix  = mkMix()
           val inG   = in * pGain.dbAmp
-          val flt1  = inG     .linLin(-1.0, 1.0, pLo, pHi)
-          val flt2  = inG.abs .linLin( 0.0, 1.0, pLo, pHi)
-          val flt   = Select.ar(pRect, flt1 :: flt2 :: Nil)
+//          val flt1  = inG.linLin(-1.0, 1.0, pLo, pHi)
+//          val flt2  = inG.abs.linLin( 0.0, 1.0, pLo, pHi)
+          val flt1  = inG.max(0.0)
+          val flt2  = inG.abs
+          val flt3  = Select.ar(pRect, flt1 :: flt2 :: Nil)
+          val flt   = flt3 * (pHi - pLo) + pLo
           mix(in, flt, pMix)
         }
 

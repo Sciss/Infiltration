@@ -20,7 +20,7 @@ import java.net.InetSocketAddress
 import de.sciss.lucre.stm
 import de.sciss.lucre.stm.{Copy, Folder, Obj}
 import de.sciss.lucre.synth.{Server, Sys}
-import de.sciss.nuages.{Nuages, NuagesView}
+import de.sciss.nuages.NuagesView
 import de.sciss.synth.proc.Implicits._
 import de.sciss.synth.proc.{Grapheme, Output, Proc}
 
@@ -31,14 +31,14 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
                             config            : Config,
                             grProcH           : stm.Source[S#Tx, Grapheme[S]],
                             numProcs          : Int,
-                          )(implicit cursor: stm.Cursor[S], cursorI: stm.Cursor[I], bridge: S#Tx => I#Tx)
-  extends Main with SoundScene {
+                          )(implicit cursor: stm.Cursor[S], /*cursorI: stm.Cursor[I],*/ bridge: S#Tx => I#Tx)
+  extends /*Main with*/ SoundScene {
 
   private[this] val panel = view.panel
 
   def init()(implicit tx: S#Tx): this.type = {
     tx.afterCommit {
-      val c = OscClient(this, this, config, localSocketAddress)
+      val c = OscClient(this, config, localSocketAddress)
       c.init()
     }
     runProgram()
@@ -60,7 +60,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
       }
 
       pGen0SOpt.foreach { pGen0S =>
-        val pOld = nGenOld.obj
+//        val pOld = nGenOld.obj
 
         val mapOut: Map[String, Set[(Obj.AttrMap[I], String)]] = nGenOld.outputs.map { case (keyOut, nOutOld) =>
           val outOld  = nOutOld.output
@@ -71,11 +71,11 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
             val aCol  = pCol.attr
             aCol.get(keyIn) match {
               case Some(f: Folder[I]) =>
-                if (f.size > 1) f.remove(outOld) else aCol.remove(keyIn)
+//                if (f.size > 1) f.remove(outOld) else aCol.remove(keyIn)
                 Some((aCol, keyIn))
 
               case Some(o: Output[I]) if o == outOld =>
-                aCol.remove(keyIn)
+//                aCol.remove(keyIn)
                 Some((aCol, keyIn))
 
               case _ =>
@@ -99,12 +99,15 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
             panel.prepareAndLocate(pGenNew, ptNew)
           }
         }
-        panel.nuages.surface match {
-          case fRoot: Nuages.Surface.Folder[I] =>
-            fRoot.peer.remove(pOld)
 
-          case _: Nuages.Surface.Timeline[I] => ???
-        }
+        nGenOld.removeSelf()
+
+//        panel.nuages.surface match {
+//          case fRoot: Nuages.Surface.Folder[I] =>
+//            fRoot.peer.remove(pOld)
+//
+//          case _: Nuages.Surface.Timeline[I] => ???
+//        }
         panel.addNewObject(pGenNew)
 
         mapOut.foreach { case (keyOut, set) =>

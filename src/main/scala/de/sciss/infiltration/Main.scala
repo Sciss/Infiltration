@@ -41,8 +41,8 @@ object Main {
     }
   }
 }
-trait Main {
-  var showLog: Boolean
-
-  def fullVersion: String
-}
+//trait Main {
+//  var showLog: Boolean
+//
+//  def fullVersion: String
+//}

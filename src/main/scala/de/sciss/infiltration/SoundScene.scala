@@ -14,6 +14,10 @@
 package de.sciss.infiltration
 
 trait SoundScene {
+  var showLog: Boolean
+
+  def fullVersion: String
+
   def setMainVolume(amp: Double): Unit
 
   def start(): Unit

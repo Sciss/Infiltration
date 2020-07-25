@@ -23,7 +23,7 @@ import scala.util.Try
 import scala.util.control.NonFatal
 
 object OscClient {
-  def apply(main: Main, scene: SoundScene, config: Config, localSocketAddress: InetSocketAddress): OscClient = {
+  def apply(scene: SoundScene, config: Config, localSocketAddress: InetSocketAddress): OscClient = {
     val c                 = UDP.Config()
     c.codec               = Network.oscCodec
     val dot               = Network.resolveDot(config, localSocketAddress)
@@ -32,7 +32,7 @@ object OscClient {
     println(s"OscClient local socket $localSocketAddress - dot $dot")
     val tx                = UDP.Transmitter(c)
     val rx                = UDP.Receiver(tx.channel, c)
-    new OscClient(config, dot, tx, rx, main = main, scene = scene)
+    new OscClient(config, dot, tx, rx, scene = scene)
   }
 
   //  private val DummyDoneFun: File => Unit = _ => ()
@@ -41,7 +41,6 @@ class OscClient(val config      : Config,
                 val dot         : Int,
                 val transmitter : UDP.Transmitter.Undirected,
                 val receiver    : UDP.Receiver.Undirected,
-                val main        : Main,
                 val scene       : SoundScene,
                ) {
 
@@ -124,7 +123,7 @@ class OscClient(val config      : Config,
           Util.reboot()
 
       case Network.OscQueryVersion =>
-        transmitter.send(Network.OscReplyVersion(main.fullVersion), sender)
+        transmitter.send(Network.OscReplyVersion(scene /*main*/.fullVersion), sender)
 
       case osc.Message("/error"        , _ @ _*) =>
       case osc.Message("/inject-abort" , _ @ _*) =>
