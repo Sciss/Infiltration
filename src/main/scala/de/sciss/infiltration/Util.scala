@@ -50,11 +50,11 @@ object Util {
 
   // rng ops
 
-  def expRand(lo: Float, hi: Float)(implicit random: Random): Float =
-    lo * math.exp(math.log(hi / lo) * random.nextFloat()).toFloat
+  def expRand(lo: Double, hi: Double)(implicit random: Random): Double =
+    lo * math.exp(math.log(hi / lo) * random.nextDouble())
 
-  def rangeRand(lo: Float, hi: Float)(implicit random: Random): Float =
-    random.nextFloat() * (hi - lo) + lo
+  def rangeRand(lo: Double, hi: Double)(implicit random: Random): Double =
+    random.nextDouble() * (hi - lo) + lo
 
   /** `lo` to `hi` (inclusive). */
   def rangeRand(lo: Int, hi: Int)(implicit random: Random): Int = {
@@ -69,9 +69,9 @@ object Util {
   def rand(i: Int)(implicit random: Random): Int = random.nextInt(i)
 
   /** `0` until `d` (exclusive). */
-  def rand(d: Float)(implicit random: Random): Float = random.nextFloat() * d
+  def rand(d: Double)(implicit random: Random): Double = random.nextDouble() * d
 
-  def coin(w: Float = 0.5f)(implicit random: Random): Boolean = random.nextFloat() < w
+  def coin(w: Double = 0.5)(implicit random: Random): Boolean = random.nextDouble() < w
 
   def choose[A](seq: Seq[A])(implicit random: Random): A =
     seq(random.nextInt(seq.size))

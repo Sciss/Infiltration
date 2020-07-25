@@ -27,6 +27,7 @@ case class Config(
                    dot                  : Int           = -1,
                    log                  : Boolean       = false,
                    display              : Boolean       = true,
+                   highPass             : Int           = 0,
                  ) {
 
 }

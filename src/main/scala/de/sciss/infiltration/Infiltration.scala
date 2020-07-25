@@ -17,18 +17,18 @@ import java.net.InetSocketAddress
 
 import de.sciss.file._
 import de.sciss.lucre.stm
+import de.sciss.lucre.stm.Folder
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.synth.{Server, Txn}
 import de.sciss.mellite.Mellite
 import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, WolkenpumpeMain, LinearWarp => LinWarp}
 import de.sciss.synth.proc.Implicits._
-import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, SoundProcesses, Universe, Workspace}
-import de.sciss.synth.ugen.{CheckBadValues, ControlValues, Gate, HPF, LinXFade2, Out}
+import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, Scheduler, SoundProcesses, Universe, Workspace}
+import de.sciss.synth.ugen.{ControlValues, LinXFade2}
 import de.sciss.synth.{GE, proc, Server => SServer}
 import org.rogach.scallop.{ArgType, ScallopConf, ValueConverter, ScallopOption => Opt}
-import de.sciss.lucre.stm.TxnLike.peer
 
-import scala.concurrent.stm.Ref
+import scala.concurrent.stm.{InTxn, Ref}
 import scala.swing.{Button, Swing}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
@@ -113,6 +113,9 @@ object Infiltration {
       val display: Opt[Boolean] = toggle("display",
         descrYes = "Show visual display", default = Some(default.display),
       )
+      val highPass: Opt[Int] = opt("high-pass", default = Some(default.highPass),
+        descr = "High-pass cut-off frequency or zero"
+      )
 
       verify()
       val config: Config = Config(
@@ -125,6 +128,7 @@ object Infiltration {
         dot                 = dot(),
         log                 = log(),
         display             = display(),
+        highPass            = highPass(),
       )
     }
 
@@ -184,6 +188,7 @@ object Infiltration {
 //        nCfg.mainSynth      = false
         nCfg.mainSynth      = true
         nCfg.showTransport  = false
+        sCfg.highPass       = config.highPass
         aCfg.deviceName     = Some("Infiltration")
       }
 
@@ -254,53 +259,53 @@ object Infiltration {
 //          times
 //        }
 
-        generator("negatum-8bbebbf4") {
-          import de.sciss.synth.ugen._
-
-          shortcut = "N"
-          val in_0    = pAudio("p1", ParamSpec( 10.0, 60.0, ExpWarp), default(60.0))
-          val param_2 = pAudio("p2", ParamSpec( -22050.0, 22050.0, LinWarp), default(2.0))
-          val param_0 = pAudio("p3", ParamSpec( 1.0, 22050.0, ExpWarp), default(2885.5125))
-          val param_1 = pAudio("p4", ParamSpec( -0.127, 22050.0, LinWarp), default(0.008551382))
-          val in_4    = pAudio("p5", ParamSpec( -0.05, 2.05, LinWarp), default(0.0))
-
-          RandSeed.ir(trig = 1, seed = 56789.0)
-          val freq            = Clip.ar(in_0, lo = 10.0, hi = 60.0)
-          val numHarm         = param_0 max 1.0
-          val blip            = Blip.ar(freq = freq, numHarm = numHarm)
-          val in_1            = param_1 min blip
-          val min_0           = in_1 min 8.9271076E-4
-          val in_2            = LeakDC.ar(in_1, coeff = 0.995)
-          val in_3            = BRZ2.ar(in_2)
-          val min_1           = in_4 min in_4
-          val maxDelayTime    = Clip.ar(in_4, lo = 0.01, hi = 20.0)
-          val max             = min_1 max 0.0
-          val delayTime       = max min maxDelayTime
-          val in_5            = DelayC.ar(in_3, maxDelayTime = maxDelayTime, delayTime = delayTime)
-          val leakDC_0        = LeakDC.ar(in_5, coeff = 0.8)
-          val in_6            = leakDC_0 roundTo in_5
-          val neq             = in_4 sig_!= in_6
-          val in_7            = in_4 min in_6
-          val in_8            = LeakDC.ar(in_7, coeff = 0.995)
-          val hPZ1_0          = HPZ1.ar(in_8)
-          val min_2           = in_7 min min_0
-          val dC              = DC.ar(0.001)
-          val slew            = Slew.ar(in_7, up = 0.001, down = 0.001)
-          val times_0         = in_7 * param_2
-          val in_9            = leakDC_0.distort
-          val hPZ1_1          = HPZ1.ar(in_9)
-          val phase           = Clip.ar(in_6, lo = 0.0, hi = 1.0)
-          val impulse         = Impulse.ar(freq = 0.1, phase = phase)
-          val min_3           = (-0.12408662: GE) min blip
-          val in_10           = Mix(Seq[GE](neq, hPZ1_0, min_2, dC, slew, times_0, hPZ1_1, impulse, min_3))
-          val checkBadValues  = CheckBadValues.ar(in_10, id = 0.0, post = 0.0)
-          val gate_0          = checkBadValues sig_== 0.0
-          val gate_1          = Gate.ar(in_10, gate = gate_0)
-          val in_11           = gate_1 clip2 1.0
-          val leakDC_1        = LeakDC.ar(in_11, coeff = 0.995)
-          val times_1         = leakDC_1 * 0.47
-          times_1
-        }
+//        generator("negatum-8bbebbf4") {
+//          import de.sciss.synth.ugen._
+//
+//          shortcut = "N"
+//          val in_0    = pAudio("p1", ParamSpec( 10.0, 60.0, ExpWarp), default(60.0))
+//          val param_2 = pAudio("p2", ParamSpec( -22050.0, 22050.0, LinWarp), default(2.0))
+//          val param_0 = pAudio("p3", ParamSpec( 1.0, 22050.0, ExpWarp), default(2885.5125))
+//          val param_1 = pAudio("p4", ParamSpec( -0.127, 22050.0, LinWarp), default(0.008551382))
+//          val in_4    = pAudio("p5", ParamSpec( -0.05, 2.05, LinWarp), default(0.0))
+//
+//          RandSeed.ir(trig = 1, seed = 56789.0)
+//          val freq            = Clip.ar(in_0, lo = 10.0, hi = 60.0)
+//          val numHarm         = param_0 max 1.0
+//          val blip            = Blip.ar(freq = freq, numHarm = numHarm)
+//          val in_1            = param_1 min blip
+//          val min_0           = in_1 min 8.9271076E-4
+//          val in_2            = LeakDC.ar(in_1, coeff = 0.995)
+//          val in_3            = BRZ2.ar(in_2)
+//          val min_1           = in_4 min in_4
+//          val maxDelayTime    = Clip.ar(in_4, lo = 0.01, hi = 20.0)
+//          val max             = min_1 max 0.0
+//          val delayTime       = max min maxDelayTime
+//          val in_5            = DelayC.ar(in_3, maxDelayTime = maxDelayTime, delayTime = delayTime)
+//          val leakDC_0        = LeakDC.ar(in_5, coeff = 0.8)
+//          val in_6            = leakDC_0 roundTo in_5
+//          val neq             = in_4 sig_!= in_6
+//          val in_7            = in_4 min in_6
+//          val in_8            = LeakDC.ar(in_7, coeff = 0.995)
+//          val hPZ1_0          = HPZ1.ar(in_8)
+//          val min_2           = in_7 min min_0
+//          val dC              = DC.ar(0.001)
+//          val slew            = Slew.ar(in_7, up = 0.001, down = 0.001)
+//          val times_0         = in_7 * param_2
+//          val in_9            = leakDC_0.distort
+//          val hPZ1_1          = HPZ1.ar(in_9)
+//          val phase           = Clip.ar(in_6, lo = 0.0, hi = 1.0)
+//          val impulse         = Impulse.ar(freq = 0.1, phase = phase)
+//          val min_3           = (-0.12408662: GE) min blip
+//          val in_10           = Mix(Seq[GE](neq, hPZ1_0, min_2, dC, slew, times_0, hPZ1_1, impulse, min_3))
+//          val checkBadValues  = CheckBadValues.ar(in_10, id = 0.0, post = 0.0)
+//          val gate_0          = checkBadValues sig_== 0.0
+//          val gate_1          = Gate.ar(in_10, gate = gate_0)
+//          val in_11           = gate_1 clip2 1.0
+//          val leakDC_1        = LeakDC.ar(in_11, coeff = 0.995)
+//          val times_1         = leakDC_1 * 0.47
+//          times_1
+//        }
 
         filterF("adapt") { in =>
           import de.sciss.synth.ugen._
@@ -357,7 +362,9 @@ object Infiltration {
           val sig     = LeakDC.ar(sig0)
           val sigL    = sig.out(0)
           val sigR    = sig.out(1)
-          val balance = Balance2.ar(sigL, sigR, pos = pBal, level = pBoost)
+          val vBal    = pBal.out(0)
+          val vBoost  = pBoost.out(0)
+          val balance = Balance2.ar(sigL, sigR, pos = vBal, level = vBoost)
           val sum     = balance.left + balance.right
 //          val buf     = LocalBuf(1024, 1) // WARNING: must be 1024 for Loudness
 //          val fft     = FFT(buf, sum, hop = 1.0, winType = 1)
@@ -367,22 +374,23 @@ object Infiltration {
           sig1
         }
 
-        def mkDirectOut(sig0: GE): Unit = {
-          val bad = CheckBadValues.ar(sig0)
-          val sig = Gate.ar(sig0, bad sig_== 0)
-          nCfg.mainChannels.zipWithIndex.foreach { case (ch, i) =>
-            val sig0 = sig out i
-            val hpf  = sCfg.highPass
-            val sig1 = if (hpf >= 16 && hpf < 20000) HPF.ar(sig0, hpf) else sig0
-            Out.ar(ch, sig1)   // XXX TODO - should go to a bus w/ limiter
-          }
-        }
+//        def mkDirectOut(sig0: GE): Unit = {
+//          val bad = CheckBadValues.ar(sig0)
+//          val sig = Gate.ar(sig0, bad sig_== 0)
+//          nCfg.mainChannels.get.zipWithIndex.foreach { case (ch, i) =>
+//            val sig0 = sig out i
+//            val hpf  = sCfg.highPass
+//            val sig1 = if (hpf >= 16 && hpf < 20000) HPF.ar(sig0, hpf) else sig0
+//            Out.ar(ch, sig1)   // XXX TODO - should go to a bus w/ limiter
+//          }
+//        }
 
-        collectorF("O-inf") { in =>
+        collectorF("O-inf") { in0 =>
           import de.sciss.synth.ugen._
-          //          val in0 = In.ar(0, 4)
+          val bad = CheckBadValues.ar(in0)
+          val in  = Gate.ar(in0, bad sig_== 0)
           val inM = Mix.mono(in)
-          CheckBadValues.ar(inM)
+//          CheckBadValues.ar(inM)
           val b1  = BPF.ar(inM, freq =  333, rq = 1)
           val b2  = BPF.ar(inM, freq = 1000, rq = 1)
           val b3  = BPF.ar(inM, freq = 3000, rq = 1)
@@ -400,9 +408,17 @@ object Infiltration {
           val sig = inG // Limiter.ar(inG)
           //          ReplaceOut.ar(0, sig) // in0 /* DelayN.ar(in0, 0.2, 0.2) */ * gain)
           //          Out.ar(0, sig)
-          mkDirectOut(sig)
+//          mkDirectOut(sig)
           //r1.poll(1, "r1")
           //r2.poll(1, "r2")
+//          in.poll(2, "IN")
+          nCfg.mainChannels.get.zipWithIndex.foreach { case (ch, i) =>
+            val sig0 = sig out i
+            val hpf  = sCfg.highPass
+            val sig1 = if (hpf >= 16 && hpf < 20000) HPF.ar(sig0, hpf) else sig0
+//            sig1.poll(2, s"sig[$ch]")
+            Out.ar(ch, sig1)   // XXX TODO - should go to a bus w/ limiter
+          }
         }
       }
     }
@@ -429,7 +445,19 @@ object Infiltration {
     Swing.onEDT {
       panel.display.setHighQuality(false)
 
-      view.addSouthComponent(Button("Sta") {
+      def button(name: String)(fun: => Unit): Unit =
+        view.addSouthComponent(Button(name) {
+          fun
+        })
+
+      def buttonTx(name: String)(fun: S#Tx => Unit): Unit =
+        view.addSouthComponent(Button(name) {
+          system.step { implicit tx =>
+            fun(tx)
+          }
+        })
+
+      button("Sta") {
         val sOpt = system.step { implicit tx =>
           w.auralSystem.serverOption
         }
@@ -437,13 +465,22 @@ object Infiltration {
           s.peer.dumpTree(controls = true)
           println(s.counts)
         }
-      })
+      }
 
-      view.addSouthComponent(Button("Cha") {
-        system.step { implicit tx =>
-          infR().foreach(_.changeNegatum())
-        }
-      })
+      buttonTx("Cha") { implicit tx =>
+        implicit val tx0: InTxn = tx.peer
+        infR().foreach(_.changeNegatum())
+      }
+
+      buttonTx("Flt") { implicit tx =>
+        implicit val tx0: InTxn = tx.peer
+        infR().foreach(_.toggleFilter())
+      }
+
+      buttonTx("Run") { implicit tx =>
+        implicit val tx0: InTxn = tx.peer
+        infR().foreach(_.toggleTestRun())
+      }
     }
 
     system.step { implicit tx =>
@@ -478,6 +515,9 @@ object Infiltration {
 
           tx.afterCommit {
             SoundProcesses.step[S]("init infiltration") { implicit tx =>
+              implicit val tx0: InTxn = tx.peer
+              implicit val itx: I#Tx  = tx.inMemory
+              val surface = nuagesH().surface.peer.asInstanceOf[Folder[I]]
               val inf = new InfMain[S, I](
                 view,
                 server    = server,
@@ -485,6 +525,8 @@ object Infiltration {
                 config    = config,
                 grProcH   = prGraphH,
                 numProcs  = numProcs,
+                scheduler = Scheduler[S](),
+                surfaceH  = itx.newHandle(surface),
               ).init()
 
               infR() = Some(inf)
