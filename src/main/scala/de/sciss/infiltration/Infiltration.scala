@@ -15,10 +15,14 @@ package de.sciss.infiltration
 
 import java.net.InetSocketAddress
 
-import de.sciss.file.File
-import de.sciss.lucre.synth.{InMemory, Server, Txn}
+import de.sciss.file._
+import de.sciss.lucre.stm
+import de.sciss.lucre.stm.store.BerkeleyDB
+import de.sciss.lucre.synth.{Server, Txn}
+import de.sciss.mellite.Mellite
 import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
-import de.sciss.synth.proc.{AuralSystem, SoundProcesses, Universe}
+import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, SoundProcesses, Universe, Workspace}
+import de.sciss.synth.proc.Implicits._
 import de.sciss.synth.ugen.{CheckBadValues, ControlValues, Gate, HPF, LinXFade2, Out}
 import de.sciss.synth.{GE, proc, Server => SServer}
 import org.rogach.scallop.{ArgType, ScallopConf, ValueConverter, ScallopOption => Opt}
@@ -137,16 +141,29 @@ object Infiltration {
       }
     }
 
-    Wolkenpumpe.init()
+//    Wolkenpumpe.init()
+    Mellite .initTypes()
     run(localSocketAddress, p.config)
   }
 
   def any2stringadd(in: Any): Any = ()
 
   def run(localSocketAddress: InetSocketAddress, config: Config): Unit = {
-    type S = InMemory
-    implicit val system: S = InMemory()
-    val w: WolkenpumpeMain[S] = new WolkenpumpeMain[S] {
+    type S = Durable
+    type I = S#I
+
+    val dbCfg         = BerkeleyDB.Config()
+    dbCfg.readOnly    = true
+    dbCfg.allowCreate = false
+    val dot           = Network.resolveDot(config, localSocketAddress)
+    val trunkId       = Network.mapDotToTrunk(dot)
+    val wsDir         = config.baseDir / "workspaces" / s"Trunk${trunkId}parC.mllt"
+    val dbF           = BerkeleyDB        .factory(wsDir, dbCfg)
+    val ws            = Workspace.Durable .read   (wsDir, dbF)
+
+    implicit val system: S = ws.system // InMemory()
+
+    val w: WolkenpumpeMain[I] = new WolkenpumpeMain[I] {
       override protected def configure(sCfg: ScissProcs.ConfigBuilder, nCfg: Nuages.ConfigBuilder,
                                        aCfg: SServer.ConfigBuilder): Unit = {
         super.configure(sCfg, nCfg, aCfg)
@@ -163,11 +180,11 @@ object Infiltration {
         aCfg.deviceName     = Some("Infiltration")
       }
 
-      override protected def registerProcesses(nuages: Nuages[S], nCfg: Nuages.Config, sCfg: ScissProcs.Config)
-                                              (implicit tx: S#Tx, universe: Universe[S]): Unit = {
+      override protected def registerProcesses(nuages: Nuages[I], nCfg: Nuages.Config, sCfg: ScissProcs.Config)
+                                              (implicit tx: I#Tx, universe: Universe[I]): Unit = {
         super.registerProcesses(nuages, nCfg, sCfg)
 
-        val dsl = DSL[S]
+        val dsl = DSL[I]
         import dsl._
         import sCfg.genNumChannels
 
@@ -177,12 +194,12 @@ object Infiltration {
           Util.wrapExtendChannels(genNumChannels, in)
         }
 
-        implicit val _nuages: Nuages[S] = nuages
+        implicit val _nuages: Nuages[I] = nuages
 
-        def filterF   (name: String)(fun: GE => GE): proc.Proc[S] =
+        def filterF   (name: String)(fun: GE => GE): proc.Proc[I] =
           filter      (name, if (DSL.useScanFixed) genNumChannels else -1)(fun)
 
-        def collectorF(name: String)(fun: GE => Unit): proc.Proc[S] =
+        def collectorF(name: String)(fun: GE => Unit): proc.Proc[I] =
           collector   (name, if (DSL.useScanFixed) genNumChannels else -1)(fun)
 
         def mix(in: GE, flt: GE, mix: GE): GE = LinXFade2.ar(in, flt, mix * 2 - 1)
@@ -380,9 +397,18 @@ object Infiltration {
       }
     }
 
-    val nuagesH = system.step { implicit tx =>
-      tx.newHandle(Nuages.folder[S])
+    val (nuagesH: stm.Source[I#Tx, Nuages[I]], prGraphH: stm.Source[S#Tx, Grapheme[S]]) = system.step { implicit tx =>
+      implicit val itx: I#Tx = system.inMemoryTx(tx)
+
+      val circleName = "circle"
+      val r         = ws.root
+      val grapheme  = r.$[Grapheme](circleName).getOrElse(sys.error(s"No grapheme '$circleName' found"))
+      val numProcs  = grapheme.lastEvent.getOrElse(sys.error("Huh, empty?")).toInt
+      println(s"NUM PROCS + $numProcs")
+      (itx.newHandle(Nuages.folder[I]), tx.newHandle(grapheme))
     }
+
+    implicit val systemI: I = system.inMemory
     w.run(nuagesH)
     val view  = w.view
 
@@ -395,7 +421,7 @@ object Infiltration {
           w.auralSystem.serverOption
         }
         sOpt.foreach { s =>
-          s.peer.dumpTree(controls = true)
+//          s.peer.dumpTree(controls = true)
           println(s.counts)
         }
       })
@@ -433,9 +459,13 @@ object Infiltration {
 
           tx.afterCommit {
             SoundProcesses.step[S]("init infiltration") { implicit tx =>
-              new InfMain[S](/*nuagesH*/ view, server = server, /*transport = panel.transport,*/
-                /*mainSynth = synPostM,*/
-                localSocketAddress = localSocketAddress, config = config).init()
+              new InfMain[S, I](
+                view,
+                server = server,
+                localSocketAddress = localSocketAddress,
+                config  = config,
+                grProcH = prGraphH,
+              ).init()
             }
           }
         }

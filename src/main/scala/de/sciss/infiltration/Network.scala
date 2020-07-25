@@ -42,14 +42,22 @@ object Network {
 
   final val ClientPort = 57120
 
-  final val KeypadDot = 23
+  final val mapDotToTrunk: Map[Int, Int] = Map(
+    36 -> 11,
+    37 -> 12,
+    40 -> 13,
+    42 -> 14,
+    43 -> 15,
+    44 -> 18,
+    77 -> 18,
+  )
 
   private def mkSocket(dot: Int): InetSocketAddress = {
     val addr = InetAddress.getByAddress(Array(192.toByte, 168.toByte, 0.toByte, dot.toByte))
     new InetSocketAddress(addr, ClientPort)
   }
 
-  final val socketSeqCtl    : Vec[SocketAddress]   = dotSeqCtl   .map(mkSocket)
+  final val socketSeqCtl    : Vec[SocketAddress]      = dotSeqCtl   .map(mkSocket)
 
   final val dotToSocketMap  : Map[Int, SocketAddress] = (dotSeqCtl zip socketSeqCtl).toMap
   final val socketToDotMap  : Map[SocketAddress, Int] = dotToSocketMap.map(_.swap)
