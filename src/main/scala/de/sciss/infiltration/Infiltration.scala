@@ -20,13 +20,15 @@ import de.sciss.lucre.stm
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.synth.{Server, Txn}
 import de.sciss.mellite.Mellite
-import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
-import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, SoundProcesses, Universe, Workspace}
+import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, WolkenpumpeMain, LinearWarp => LinWarp}
 import de.sciss.synth.proc.Implicits._
+import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, SoundProcesses, Universe, Workspace}
 import de.sciss.synth.ugen.{CheckBadValues, ControlValues, Gate, HPF, LinXFade2, Out}
 import de.sciss.synth.{GE, proc, Server => SServer}
 import org.rogach.scallop.{ArgType, ScallopConf, ValueConverter, ScallopOption => Opt}
+import de.sciss.lucre.stm.TxnLike.peer
 
+import scala.concurrent.stm.Ref
 import scala.swing.{Button, Swing}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
@@ -108,6 +110,9 @@ object Infiltration {
       val log: Opt[Boolean] = toggle("log",
         descrYes = "Enable logging", default = Some(default.log),
       )
+      val display: Opt[Boolean] = toggle("display",
+        descrYes = "Show visual display", default = Some(default.display),
+      )
 
       verify()
       val config: Config = Config(
@@ -119,6 +124,7 @@ object Infiltration {
         ownSocket           = ownSocket.toOption,
         dot                 = dot(),
         log                 = log(),
+        display             = display(),
       )
     }
 
@@ -157,7 +163,7 @@ object Infiltration {
     dbCfg.allowCreate = false
     val dot           = Network.resolveDot(config, localSocketAddress)
     val trunkId       = Network.mapDotToTrunk(dot)
-    val wsDir         = config.baseDir / "workspaces" / s"Trunk${trunkId}parC.mllt"
+    val wsDir         = config.baseDir / "workspaces" / s"Trunk${trunkId}graph.mllt"
     val dbF           = BerkeleyDB        .factory(wsDir, dbCfg)
     val ws            = Workspace.Durable .read   (wsDir, dbF)
 
@@ -211,41 +217,41 @@ object Infiltration {
           else
             Vector.fill(genNumChannels)(in)
 
-        generator("negatum-3f704ff8") {
-          import de.sciss.synth.ugen._
-
-          //          shortcut = "N"
-          val freq_0  = pAudio("p1", ParamSpec( 13.122, 1.73999104e8, ExpWarp), default(1.73999104e8))
-          val freq_1  = pAudio("p2", ParamSpec(-13.122, 22050.0     , LinWarp), default( 0.14800115))
-          val in_6    = pAudio("p3", ParamSpec( -0.81 ,     2.05    , LinWarp), default(-0.29881296))
-          val param   = pAudio("p4", ParamSpec( -0.32 , 22050.0     , LinWarp), default( 0.0))
-
-          RandSeed.ir(trig = 1, seed = 56789.0)
-          val in_0            = Impulse.ar(freq = 60.0, phase = 1.0)
-          val bPZ2            = BPZ2.ar(in_0)
-          val lFDNoise1_0     = LFDNoise1.ar(freq_0)
-          val in_1            = lFDNoise1_0 min param
-          val in_2            = LeakDC.ar(in_1, coeff = 0.995)
-          val in_3            = Delay1.ar(in_2)
-          val lag             = Lag.ar(in_3, time = 1.0)
-          val in_4            = param min in_3
-          val min_0           = in_4 min lag
-          val min_1           = in_1 min min_0
-          val in_5            = LeakDC.ar(in_4, coeff = 0.995)
-          val delay1          = Delay1.ar(in_5)
-          val min_2           = bPZ2 min param
-          val impulse         = Impulse.ar(freq = 0.1, phase = 1.0)
-          val lFDNoise1_1     = LFDNoise1.ar(freq_1)
-          val dC              = DC.ar(in_6)
-          val in_7            = Mix(Seq[GE](min_1, delay1, min_2, impulse, lFDNoise1_1, dC))
-          val checkBadValues  = CheckBadValues.ar(in_7, id = 0.0, post = 0.0)
-          val gate_0          = checkBadValues sig_== 0.0
-          val gate_1          = Gate.ar(in_7, gate = gate_0)
-          val in_8            = gate_1 clip2 1.0
-          val leakDC          = LeakDC.ar(in_8, coeff = 0.995)
-          val times           = leakDC * 0.47
-          times
-        }
+//        generator("negatum-3f704ff8") {
+//          import de.sciss.synth.ugen._
+//
+//          //          shortcut = "N"
+//          val freq_0  = pAudio("p1", ParamSpec( 13.122, 1.73999104e8, ExpWarp), default(1.73999104e8))
+//          val freq_1  = pAudio("p2", ParamSpec(-13.122, 22050.0     , LinWarp), default( 0.14800115))
+//          val in_6    = pAudio("p3", ParamSpec( -0.81 ,     2.05    , LinWarp), default(-0.29881296))
+//          val param   = pAudio("p4", ParamSpec( -0.32 , 22050.0     , LinWarp), default( 0.0))
+//
+//          RandSeed.ir(trig = 1, seed = 56789.0)
+//          val in_0            = Impulse.ar(freq = 60.0, phase = 1.0)
+//          val bPZ2            = BPZ2.ar(in_0)
+//          val lFDNoise1_0     = LFDNoise1.ar(freq_0)
+//          val in_1            = lFDNoise1_0 min param
+//          val in_2            = LeakDC.ar(in_1, coeff = 0.995)
+//          val in_3            = Delay1.ar(in_2)
+//          val lag             = Lag.ar(in_3, time = 1.0)
+//          val in_4            = param min in_3
+//          val min_0           = in_4 min lag
+//          val min_1           = in_1 min min_0
+//          val in_5            = LeakDC.ar(in_4, coeff = 0.995)
+//          val delay1          = Delay1.ar(in_5)
+//          val min_2           = bPZ2 min param
+//          val impulse         = Impulse.ar(freq = 0.1, phase = 1.0)
+//          val lFDNoise1_1     = LFDNoise1.ar(freq_1)
+//          val dC              = DC.ar(in_6)
+//          val in_7            = Mix(Seq[GE](min_1, delay1, min_2, impulse, lFDNoise1_1, dC))
+//          val checkBadValues  = CheckBadValues.ar(in_7, id = 0.0, post = 0.0)
+//          val gate_0          = checkBadValues sig_== 0.0
+//          val gate_1          = Gate.ar(in_7, gate = gate_0)
+//          val in_8            = gate_1 clip2 1.0
+//          val leakDC          = LeakDC.ar(in_8, coeff = 0.995)
+//          val times           = leakDC * 0.47
+//          times
+//        }
 
         generator("negatum-8bbebbf4") {
           import de.sciss.synth.ugen._
@@ -397,20 +403,23 @@ object Infiltration {
       }
     }
 
-    val (nuagesH: stm.Source[I#Tx, Nuages[I]], prGraphH: stm.Source[S#Tx, Grapheme[S]]) = system.step { implicit tx =>
-      implicit val itx: I#Tx = system.inMemoryTx(tx)
+    val (nuagesH: stm.Source[I#Tx, Nuages[I]], prGraphH: stm.Source[S#Tx, Grapheme[S]], numProcs) =
+      system.step { implicit tx =>
+        implicit val itx: I#Tx = system.inMemoryTx(tx)
 
-      val circleName = "circle"
-      val r         = ws.root
-      val grapheme  = r.$[Grapheme](circleName).getOrElse(sys.error(s"No grapheme '$circleName' found"))
-      val numProcs  = grapheme.lastEvent.getOrElse(sys.error("Huh, empty?")).toInt
-      println(s"NUM PROCS + $numProcs")
-      (itx.newHandle(Nuages.folder[I]), tx.newHandle(grapheme))
-    }
+        val circleName = "circle"
+        val r         = ws.root
+        val grapheme  = r.$[Grapheme](circleName).getOrElse(sys.error(s"No grapheme '$circleName' found"))
+        val _numProcs = grapheme.lastEvent.getOrElse(sys.error("Huh, empty?")).toInt
+        println(s"numProcs = ${_numProcs}")
+        (itx.newHandle(Nuages.folder[I]), tx.newHandle(grapheme), _numProcs)
+      }
 
     implicit val systemI: I = system.inMemory
     w.run(nuagesH)
     val view  = w.view
+
+    val infR = Ref(Option.empty[InfMain[S, I]])
 
     val panel = view.panel
     Swing.onEDT {
@@ -421,8 +430,14 @@ object Infiltration {
           w.auralSystem.serverOption
         }
         sOpt.foreach { s =>
-//          s.peer.dumpTree(controls = true)
+          s.peer.dumpTree(controls = true)
           println(s.counts)
+        }
+      })
+
+      view.addSouthComponent(Button("Cha") {
+        system.step { implicit tx =>
+          infR().foreach(_.changeNegatum())
         }
       })
     }
@@ -459,13 +474,16 @@ object Infiltration {
 
           tx.afterCommit {
             SoundProcesses.step[S]("init infiltration") { implicit tx =>
-              new InfMain[S, I](
+              val inf = new InfMain[S, I](
                 view,
-                server = server,
+                server    = server,
                 localSocketAddress = localSocketAddress,
-                config  = config,
-                grProcH = prGraphH,
+                config    = config,
+                grProcH   = prGraphH,
+                numProcs  = numProcs,
               ).init()
+
+              infR() = Some(inf)
             }
           }
         }

@@ -49,3 +49,4 @@ Options are something like
 - `java -Djava.io.tmpdir=/tmp/ramdisk -jar Mellite.jar -r CorrEnds --headless TrunkNparC.mllt`
 - make-chains `--tie` (play around with `--tie-strength` and `--tie-distance` if tying fails; try `--tie-distance 0.01`
   first, if still failing, begin increasing `--tie-strength 2.0 --tie-distance 0.02` etc.)
+- convert-grapheme

@@ -15,18 +15,19 @@ package de.sciss.infiltration
 
 object Main {
   val map: Map[String, Array[String] => Unit] = Map(
-    "infiltration"    -> Infiltration     .main,
-    "copy-folder"     -> CopyFolder       .main,
-    "hilbert-curve"   -> HilbertCurveTest .main,
-    "optimize-test"   -> OptimizeTest     .main,
-    "optimize"        -> OptimizeWorkspace.main,
-    "parametrize"     -> Parametrize      .main,
-    "topologies"      -> RecordTopologies .main,
-    "negatum"         -> RunNegatum       .main,
-    "trunk-to-sound"  -> TrunkToSoundSeq  .main,
-    "play-chain"      -> PlayChain        .main,
-    "remove-simple"   -> RemoveSimpleProcs.main,
-    "make-chains"     -> MakeChains       .main,
+    "infiltration"      -> Infiltration     .main,
+    "copy-folder"       -> CopyFolder       .main,
+    "hilbert-curve"     -> HilbertCurveTest .main,
+    "optimize-test"     -> OptimizeTest     .main,
+    "optimize"          -> OptimizeWorkspace.main,
+    "parametrize"       -> Parametrize      .main,
+    "topologies"        -> RecordTopologies .main,
+    "negatum"           -> RunNegatum       .main,
+    "trunk-to-sound"    -> TrunkToSoundSeq  .main,
+    "play-chain"        -> PlayChain        .main,
+    "remove-simple"     -> RemoveSimpleProcs.main,
+    "make-chains"       -> MakeChains       .main,
+    "convert-grapheme"  -> ConvertGrapheme  .main,
   )
 
   def main(args: Array[String]): Unit = {
