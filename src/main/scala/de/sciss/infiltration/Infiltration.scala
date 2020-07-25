@@ -13,58 +13,137 @@
 
 package de.sciss.infiltration
 
-import de.sciss.lucre.stm.Sys
-import de.sciss.lucre.synth.{InMemory, Server, Synth, Txn}
-import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, NuagesAttribute, NuagesPanel, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
-import de.sciss.synth.proc.{AuralSystem, Universe}
+import java.net.InetSocketAddress
+
+import de.sciss.file.File
+import de.sciss.lucre.synth.{InMemory, Server, Txn}
+import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, Wolkenpumpe, WolkenpumpeMain, LinearWarp => LinWarp}
+import de.sciss.synth.proc.{AuralSystem, SoundProcesses, Universe}
 import de.sciss.synth.ugen.{CheckBadValues, ControlValues, Gate, HPF, LinXFade2, Out}
-import de.sciss.synth.{GE, SynthGraph, addAfter, proc, Server => SServer}
+import de.sciss.synth.{GE, proc, Server => SServer}
+import org.rogach.scallop.{ArgType, ScallopConf, ValueConverter, ScallopOption => Opt}
 
 import scala.swing.{Button, Swing}
+import scala.util.control.NonFatal
+import scala.util.{Failure, Success, Try}
 
 object Infiltration {
-  def main(args: Array[String]): Unit = {
-    Wolkenpumpe.init()
-    Swing.onEDT {
-      run()
+  final protected def parseSocket(s: String): Either[String, InetSocketAddress] = {
+    val arr = s.split(':')
+    if (arr.length != 2) Left(s"Must be of format <host>:<port>")
+    else parseSocket(arr)
+  }
+
+  final protected def parseSocketDot(s: String): Either[String, (InetSocketAddress, Int)] = {
+    val arr = s.split(':')
+    if (arr.length != 3) Left(s"Must be of format <host>:<port>:<dot>")
+    else {
+      val dotS = arr(2)
+      Try(dotS.toInt) match {
+        case Success(dot) =>
+          parseSocket(arr).map(socket => (socket,dot))
+        case Failure(_) => Left(s"Invalid dot: $dotS - must be an integer")
+      }
     }
   }
 
-  def dumpTopology[S <: Sys[S]](np: NuagesPanel[S])(implicit tx: S#Tx): Unit = {
-    val n = np.nodes
-    n.foreach { p =>
-      println(p.name)
-      p.attributes.foreach { case (key, a) =>
-        val vec = a.inputView match {
-          case nm: NuagesAttribute.Numeric => Some(nm.numericValue)
-          case _ => None
-        }
-        println(s"  < $key: ${Option(a.numericValue)} - ${a.spec} - $vec")
+  private def parseSocket(arr: Array[String]): Either[String, InetSocketAddress] = {
+    val host = arr(0)
+    val port = arr(1)
+    Try(new InetSocketAddress(host, port.toInt)) match {
+      case Success(addr)  => Right(addr)
+      case Failure(ex)    => Left(s"Invalid socket address: $host:$port - ${ex.getClass.getSimpleName}")
+    }
+  }
+
+  final protected def validateSockets(vs: Seq[String], useDot: Boolean): Either[String, Unit] =
+    vs.foldLeft(Right(()): Either[String, Unit]) { case (e, v) =>
+      e.flatMap { _ =>
+        val eth = if (useDot) parseSocketDot(v)
+        else                  parseSocket   (v)
+        eth.map(_ => ()) }
+    }
+
+  def main(args: Array[String]): Unit = {
+    object p extends ScallopConf(args) {
+      printedName = "in|filtration"
+
+      private val default = Config()
+
+      val baseDir: Opt[File] = opt(default = Some(default.baseDir),
+        descr = "Base directory"
+      )
+      val dumpOsc: Opt[Boolean] = toggle("dump-osc",
+        descrYes = "Dump OSC traffic", default = Some(default.dumpOsc),
+      )
+      val isLaptop: Opt[Boolean] = toggle("laptop",
+        descrYes = "Running from laptop", default = Some(default.isLaptop),
+      )
+      val disableEnergySaving: Opt[Boolean] = toggle("disable-energy-saving",
+        descrYes = "Disable energy saving processes", default = Some(default.disableEnergySaving),
+      )
+      val qjLaunch: Opt[Boolean] = toggle("qjackctl",
+        descrYes = "Launch QJackCtl", default = Some(default.qjLaunch),
+      )
+      private implicit object InetSocketAddressConverter extends ValueConverter[InetSocketAddress] {
+        def parse(s: List[(String, List[String])]): Either[String, Option[InetSocketAddress]] =
+          s match {
+            case (_, v :: Nil) :: Nil => parseSocket(v).map(Some(_))
+            case Nil                  => Right(None)
+            case _                    => Left("provide <host>:<port>")
+          }
+
+        val argType: ArgType.V = ArgType.SINGLE
       }
-      p.outputs.foreach { case (key, a) =>
-        println(s"  > $key: ${a.mappings}")
+      val ownSocket: Opt[InetSocketAddress] = opt(
+        descr = "Own IP address"
+      )
+      val dot: Opt[Int] = opt(default = Some(default.dot),
+        descr = "Node identifier, last component of the IP address"
+      )
+      val log: Opt[Boolean] = toggle("log",
+        descrYes = "Enable logging", default = Some(default.log),
+      )
+
+      verify()
+      val config: Config = Config(
+        baseDir             = baseDir(),
+        dumpOsc             = dumpOsc(),
+        isLaptop            = isLaptop(),
+        disableEnergySaving = disableEnergySaving(),
+        qjLaunch            = qjLaunch(),
+        ownSocket           = ownSocket.toOption,
+        dot                 = dot(),
+        log                 = log(),
+      )
+    }
+
+    val cfg = p.config
+    val localSocketAddress = Network.initConfig(cfg)
+
+//    if (cfg.log) main.showLog = true
+
+    if (!cfg.isLaptop && cfg.qjLaunch) {
+      // -p preset, -a active patch bay, -s start server
+      val cmd = Seq("qjackctl") // , "-p", cfg.qjPreset, "-a", cfg.qjPatchBay.path, "-s")
+      println(cmd.mkString(" "))
+      import sys.process._
+      try {
+        cmd.run()
+      } catch {
+        case NonFatal(ex) =>
+          Console.err.println("Could not start QJackCtl")
+          ex.printStackTrace()
       }
     }
 
-    //    n.surface match {
-    //      case Nuages.Surface.Folder(f) =>
-    //        f.iterator.foreach {
-    //          case p: Proc[S] =>
-    //
-    //            println(p.name)
-    //
-    //          case other =>
-    //            println(s"(ignoring $other)")
-    //        }
-    //
-    //      case Nuages.Surface.Timeline(_) =>
-    //        sys.error("Timeline not supported")
-    //    }
+    Wolkenpumpe.init()
+    run(localSocketAddress, p.config)
   }
 
   def any2stringadd(in: Any): Any = ()
 
-  def run(): Unit = {
+  def run(localSocketAddress: InetSocketAddress, config: Config): Unit = {
     type S = InMemory
     implicit val system: S = InMemory()
     val w: WolkenpumpeMain[S] = new WolkenpumpeMain[S] {
@@ -76,9 +155,11 @@ object Infiltration {
         nCfg.soloChannels   = None
         // we need one here so that the right number of input channels is chosen
         nCfg.lineInputs     = Vector(NamedBusConfig("ignore", 0 until 2))
-        nCfg.lineOutputs    = Vector.empty
+        nCfg.lineOutputs    = Vector(NamedBusConfig("network" /* "ignore"*/, 4 until 6))
         nCfg.micInputs      = Vector.empty
-        nCfg.mainSynth      = false
+        nCfg.lineOutputsSplay = false
+//        nCfg.mainSynth      = false
+        nCfg.mainSynth      = true
         aCfg.deviceName     = Some("Infiltration")
       }
 
@@ -243,18 +324,18 @@ object Infiltration {
 
         generator("in") {
           import de.sciss.synth.ugen._
-          val pBoost  = pAudio("gain", ParamSpec(0.1, 10, ExpWarp), default(1.0))
-          val pBal    = pAudio("$bal", ParamSpec(-1.0, 1.0, LinWarp), default(0.0))
+          val pBoost  = pAudio("gain" , ParamSpec( 0.1, 10, ExpWarp), default(1.0))
+          val pBal    = pAudio("bal"  , ParamSpec(-1.0, 1.0, LinWarp), default(0.0))
           val sig0    = In.ar(NumOutputBuses.ir, 2)
           val sig     = LeakDC.ar(sig0)
           val sigL    = sig.out(0)
           val sigR    = sig.out(1)
           val balance = Balance2.ar(sigL, sigR, pos = pBal, level = pBoost)
           val sum     = balance.left + balance.right
-          val buf     = LocalBuf(1024, 1) // WARNING: must be 1024 for Loudness
-          val fft     = FFT(buf, sum, hop = 1.0, winType = 1)
-          val loud    = Loudness.kr(fft)
-          loud.poll(1, "loud")
+//          val buf     = LocalBuf(1024, 1) // WARNING: must be 1024 for Loudness
+//          val fft     = FFT(buf, sum, hop = 1.0, winType = 1)
+//          val loud    = Loudness.kr(fft)
+//          loud.poll(1, "loud")
           val sig1: GE = ForceChan(sum)
           sig1
         }
@@ -284,7 +365,7 @@ object Infiltration {
           //          r1.ampDb.poll(1, "r1")
           //          r2.ampDb.poll(1, "r2")
           //          r3.ampDb.poll(1, "r3")
-          val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 10).min(8.0 /*4.0*/)
+          val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 1.25 /* * 10*/).min(1.0 /*8.0*/ /*4.0*/)
           val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1)
           //val gain = Lag.kr(gainF, 1.0).min(4.0)
           //          gain.ampDb.poll(1, "gain")
@@ -304,53 +385,59 @@ object Infiltration {
     }
     w.run(nuagesH)
     val view  = w.view
+
     val panel = view.panel
-    panel.display.setHighQuality(false)
+    Swing.onEDT {
+      panel.display.setHighQuality(false)
 
-    view.addSouthComponent(Button("Top") {
-      system.step { implicit tx =>
-        dumpTopology(w.view.panel)
-      }
-    })
-
-    view.addSouthComponent(Button("Sta") {
-      val cOpt = system.step { implicit tx =>
-        w.auralSystem.serverOption.map { s =>
-          s.counts
+      view.addSouthComponent(Button("Sta") {
+        val sOpt = system.step { implicit tx =>
+          w.auralSystem.serverOption
         }
-      }
-      cOpt.foreach(println)
-    })
+        sOpt.foreach { s =>
+          s.peer.dumpTree(controls = true)
+          println(s.counts)
+        }
+      })
+    }
 
     system.step { implicit tx =>
       w.auralSystem.addClientNow(new AuralSystem.Client {
         def auralStarted(server: Server)(implicit tx: Txn): Unit = {
-          val dfPostM = SynthGraph {
-            import de.sciss.synth._
-            import de.sciss.synth.ugen._
-//            val nConfig     = panel.config
-            import Ops._
-            val amp   = "amp".kr(1f)
-            val in0   = In.ar(0, 4)
-            val in  = Mix.mono(in0)
-            CheckBadValues.ar(in)
-            val b1  = BPF.ar(in, freq =  333, rq = 1)
-            val b2  = BPF.ar(in, freq = 1000, rq = 1)
-            val b3  = BPF.ar(in, freq = 3000, rq = 1)
-            val r1  = Decay.kr(b1.abs, 0.2)
-            val r2  = Decay.kr(b2.abs, 0.2)
-            val r3  = Decay.kr(b3.abs, 0.2)
-//            r1.ampDb.poll(1, "r1")
-//            r2.ampDb.poll(1, "r2")
-//            r3.ampDb.poll(1, "r3")
-            val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 10).min(8.0 /*4.0*/)
-            val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1) * amp
-//            gain.ampDb.poll(1, "gain")
-            val sig = Limiter.ar(in0 * gain)
-            ReplaceOut.ar(0, sig)
+//          val dfPostM = SynthGraph {
+//            import de.sciss.synth._
+//            import de.sciss.synth.ugen._
+////            val nConfig     = panel.config
+//            import Ops._
+//            val amp   = "amp".kr(1f)
+//            val in0   = In.ar(0, 4)
+//            val in  = Mix.mono(in0)
+//            CheckBadValues.ar(in)
+//            val b1  = BPF.ar(in, freq =  333, rq = 1)
+//            val b2  = BPF.ar(in, freq = 1000, rq = 1)
+//            val b3  = BPF.ar(in, freq = 3000, rq = 1)
+//            val r1  = Decay.kr(b1.abs, 0.2)
+//            val r2  = Decay.kr(b2.abs, 0.2)
+//            val r3  = Decay.kr(b3.abs, 0.2)
+////            r1.ampDb.poll(1, "r1")
+////            r2.ampDb.poll(1, "r2")
+////            r3.ampDb.poll(1, "r3")
+//            val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 10).min(8.0 /*4.0*/)
+//            val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1) * amp
+////            gain.ampDb.poll(1, "gain")
+//            val sig = Limiter.ar(in0 * gain)
+//            ReplaceOut.ar(0, sig)
+//          }
+//          val synPostM = Synth.play(dfPostM, Some("post-main"))(server.defaultGroup, addAction = addAfter)
+//          panel.mainSynth = Some(synPostM)
+
+          tx.afterCommit {
+            SoundProcesses.step[S]("init infiltration") { implicit tx =>
+              new InfMain[S](/*nuagesH*/ view, server = server, /*transport = panel.transport,*/
+                /*mainSynth = synPostM,*/
+                localSocketAddress = localSocketAddress, config = config).init()
+            }
           }
-          val synPostM = Synth.play(dfPostM, Some("post-main"))(server.defaultGroup, addAction = addAfter)
-          panel.mainSynth = Some(synPostM)
         }
 
         def auralStopped()(implicit tx: Txn): Unit = ()
