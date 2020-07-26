@@ -30,7 +30,10 @@ case class Config(
                    display              : Boolean       = true,
                    highPass             : Int           = 0,
                    sensorNoiseFloor     : Float         = 1.0e-3f,
-                   sensorTrigThresh     : Float         = 0.2f,
+                   sensorTrigThreshUp   : Float         = 0.25f,
+                   sensorTrigThreshDn   : Float         = 0.15f,
+                   flipTrigDurSec       : Int           = 5 * 60,
+                   forgetDurSec         : Int           = 2 * 60,
                  ) {
 
 }

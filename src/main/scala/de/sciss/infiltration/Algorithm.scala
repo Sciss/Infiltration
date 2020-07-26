@@ -24,9 +24,10 @@ import de.sciss.lucre.stm.{Copy, Folder}
 import de.sciss.lucre.synth.{Server, Sys}
 import de.sciss.nuages.NuagesView
 import de.sciss.numbers
+import de.sciss.kollflitz
 import de.sciss.synth.proc.Implicits._
 import de.sciss.synth.proc.Proc.{mainIn, mainOut}
-import de.sciss.synth.proc.{EnvSegment, Grapheme, Output, Proc, Scheduler, TimeRef}
+import de.sciss.synth.proc.{EnvSegment, Grapheme, Output, Proc, Scheduler, SoundProcesses, TimeRef}
 import de.sciss.synth.{Curve, FillValue, message}
 
 import scala.annotation.elidable
@@ -95,8 +96,9 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     this
   }
 
-  private[this] val sensorNoiseFloor  = config.sensorNoiseFloor
-  private[this] val sensorTrigThresh  = config.sensorTrigThresh
+  private[this] val sensorNoiseFloor    = config.sensorNoiseFloor
+  private[this] val sensorTrigThreshUp  = config.sensorTrigThreshUp
+  private[this] val sensorTrigThreshDn  = config.sensorTrigThreshDn
 
 //  @volatile
 //  private[this] var trigTimeA0 = 0L
@@ -108,11 +110,14 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
 //  private[this] var trigTimeB2 = 0L
 //  private[this] var trigTimeB3 = 0L
 
-  private[this] val trigTimes = new Array[Long](8)
+  private[this] val trigStates  = new Array[Boolean ](8)
+  private[this] val trigTimes   = new Array[Long    ](8)
 
   private[this] val maxJumpTrigSpan   = 10 * 60000L // milliseconds
   private[this] val minJumpTrigPause  = 15 * 60000L // milliseconds
   private[this] val minJumpNumTrig    = 6
+  private[this] val maxFlipTrigSpan   = (config.flipTrigDurSec * 1000).toLong // 5 * 60000L // milliseconds
+  private[this] val forgetDurSec      = config.forgetDurSec // 2 /*5*/ * 60
 
   private[this] val timeJumpGraph = Ref(0L)
 
@@ -121,51 +126,202 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     var countBal  = 0
     var balBase   = 0f
     val tBal  = sensorNoiseFloor
-    val a0    = data(0)
-    val a1    = data(1)
-    val a2    = data(2)
-    val a3    = data(3)
-    val b0    = data(4)
-    val b1    = data(5)
-    val b2    = data(6)
-    val b3    = data(7)
-    if (a0 > tBal || b0 > tBal) {
-      balBase   += a0 / (a0 + b0)
-      countBal += 1
-    }
-    if (a1 > tBal || b1 > tBal) {
-      balBase   += a1 / (a1 + b1)
-      countBal += 1
-    }
-    if (a2 > tBal || b2 > tBal) {
-      balBase   += a2 / (a2 + b2)
-      countBal += 1
-    }
-    if (a3 > tBal || b3 > tBal) {
-      balBase   += a3 / (a3 + b3)
-      countBal += 1
-    }
-    if (countBal == 0) return
 
-    balBase /= countBal  // fully a: 1.0, fully b: 0.0
-    val vBal = balBase * 2 - 1  // -1 ... +1
-//      println(s"vBal = $vBal")
-    server ! message.ControlBusSet(FillValue(ciBal, vBal))
-    if (config.display) Swing.onEDT {
-      // let's appropriate that rotary dial, LOL
-      panel.glideTime = balBase * 2 // 0 .. 1
+    var ai = 0
+    var bi = 4
+    while (ai < 4) {
+      val a = data(ai)
+      val b = data(bi)
+      if (a > tBal || b > tBal) {
+        balBase   += a / (a + b)
+        countBal += 1
+      }
+      ai += 1
+      bi += 1
     }
 
-    val tt    = sensorTrigThresh
+    if (countBal > 0) {
+      balBase /= countBal  // fully a: 1.0, fully b: 0.0
+      val vBal = balBase * 2 - 1  // -1 ... +1
+      //      println(s"vBal = $vBal")
+      server ! message.ControlBusSet(FillValue(ciBal, vBal))
+      if (config.display) Swing.onEDT {
+        // let's appropriate that rotary dial, LOL
+        panel.glideTime = balBase * 2 // 0 .. 1
+      }
+    }
+
+    val ttUp = sensorTrigThreshUp
+    val ttDn = sensorTrigThreshDn
+    val ts          = trigStates
+    val _trigTimes  = trigTimes
     val stamp = System.currentTimeMillis()
-    if (a0 > tt) trigTimes(0) = stamp
-    if (a1 > tt) trigTimes(1) = stamp
-    if (a2 > tt) trigTimes(2) = stamp
-    if (a3 > tt) trigTimes(3) = stamp
-    if (b0 > tt) trigTimes(4) = stamp
-    if (b1 > tt) trigTimes(5) = stamp
-    if (b2 > tt) trigTimes(6) = stamp
-    if (b3 > tt) trigTimes(7) = stamp
+
+    ai = 0
+    var hasNewTrig = false
+    while (ai < 8) {
+      val a = data(ai)
+      if (a > ttUp) {
+        if (!ts(ai)) {
+          ts        (ai)  = true
+          _trigTimes(ai)  = stamp
+          hasNewTrig      = true
+        }
+      } else if (a < ttDn) {
+        if (ts(ai)) {
+          ts(ai) = false
+        }
+      }
+      ai += 1
+    }
+
+    if (hasNewTrig) {
+      ai = 0
+      bi = 4
+      val minTimeStart = stamp - maxFlipTrigSpan
+      var flip = 0L
+      while (ai < 4) {
+        val ta = _trigTimes(ai)
+        val tb = _trigTimes(bi)
+        if (ts(ai) && ts(bi) && ta > minTimeStart && tb > minTimeStart /*&& ta != tb*/) {
+          import numbers.Implicits._
+          // we use 8 bits; zero mean no flip, otherwise 1 to 255 specifies the amount of spacing between
+          // the opposite triggers
+          val amt   = math.max(math.abs(ta - tb), 1000L).toDouble.expLin(
+            1000.0, maxFlipTrigSpan.toDouble, 1.0, 256).toInt.clip(1, 255)
+          val code  = amt.toLong << (8 * (if (ta < tb) ai else bi))
+          flip |= code
+        }
+        ai += 1
+        bi += 1
+      }
+      if (flip != 0) {
+        SoundProcesses.step[S]("update flip") { implicit tx =>
+          updateFlip(flip)
+        }
+      }
+    }
+  }
+
+  private[this] val tkForgetFlip = Ref(-1)
+
+  def updateFlip(code: Long)(implicit tx: S#Tx): Unit = {
+    implicit val itx: I#Tx  = bridge(tx)
+
+    log(s"update flip ${code.toHexString}") // ${(bitMask | (1 << 8)).toBinaryString.substring(1)}")
+
+    val pAdapt1   = hndAdapt1()
+    val aAdapt1   = pAdapt1.attr
+    val bitMaskA  = code.toInt // (code & 0xFFFFFFFFL).toInt
+    val bitMaskB  = (code >>> 32).toInt // & 0xFFFFFFFFL
+
+    if (bitMaskA != 0) {  // flip range
+      val oldLoOpt  = aAdapt1.$[DoubleVector](attrLo)
+      val oldHiOpt  = aAdapt1.$[DoubleVector](attrHi)
+      val oldLo     = oldLoOpt.fold(vecZero)(_.value)
+      val oldHi     = oldHiOpt.fold(vecOne )(_.value)
+      val (newLo, newHi) = Vector.tabulate(4) { i =>
+        val amt = bitMaskA >>> (8 * i)
+        val oldLoI = oldLo(i)
+        val oldHiI = oldHi(i)
+        if (amt == 0) (oldLoI, oldHiI) else {
+          import numbers.Implicits._
+          val amtLo = amt.linLin(0, 255, 0.0, 0.5)
+          val amtHi = 1.0 - amtLo
+          if (oldLoI < oldHiI) (amtHi, amtLo) else (amtLo, amtHi)
+        }
+      } .unzip
+      oldLoOpt match {
+        case Some(DoubleVector.Var(vr)) => vr() = newLo
+        case _ => aAdapt1.put(attrLo, DoubleVector.newVar[I](newLo))
+      }
+      oldHiOpt match {
+        case Some(DoubleVector.Var(vr)) => vr() = newHi
+        case _ => aAdapt1.put(attrHi, DoubleVector.newVar[I](newHi))
+      }
+    }
+
+    if (bitMaskB != 0) {  // flip mode
+      val oldAbsOpt = aAdapt1.$[DoubleVector](attrAbs)
+      val oldAbs    = oldAbsOpt.fold(vecZero)(_.value)
+      val newAbs = Vector.tabulate(4) { i =>
+        val amt = bitMaskB >>> (8 * i)
+        val oldAbsI = oldAbs(i)
+        if (amt == 0) oldAbsI else 1.0 - oldAbsI
+      }
+      oldAbsOpt match {
+        case Some(DoubleVector.Var(vr)) => vr() = newAbs
+        case _ => aAdapt1.put(attrLo, DoubleVector.newVar[I](newAbs))
+      }
+    }
+
+    scheduleForget()
+  }
+
+  private def scheduleForget()(implicit tx: S#Tx): Unit = {
+    implicit val tx0: InTxn = tx.peer
+
+    val timeForget = scheduler.time + (TimeRef.SampleRate * forgetDurSec).toLong
+    val token = scheduler.schedule(timeForget) { implicit tx =>
+      forgetFlip()
+    }
+    val oldToken = tkForgetFlip.swap(token)
+    scheduler.cancel(oldToken)
+  }
+
+  def forgetFlip()(implicit tx: S#Tx): Unit = {
+    implicit val itx: I#Tx  = bridge(tx)
+
+    val pAdapt1   = hndAdapt1()
+    val aAdapt1   = pAdapt1.attr
+    val oldLoOpt  = aAdapt1.$[DoubleVector](attrLo)
+    val oldHiOpt  = aAdapt1.$[DoubleVector](attrHi)
+    val oldAbsOpt = aAdapt1.$[DoubleVector](attrAbs)
+    val oldLo     = oldLoOpt  .fold(vecZero)(_.value)
+    val oldHi     = oldHiOpt  .fold(vecOne )(_.value)
+    val oldAbs    = oldAbsOpt .fold(vecZero)(_.value)
+    val forgetLo  = !allSame(oldLo  )
+    val forgetHi  = !allSame(oldHi  )
+    val forgetAbs = !allSame(oldAbs )
+
+    log(s"forget-flip lo $forgetLo hi $forgetHi, abs $forgetAbs")
+
+    def meanCoin(in: Vec[Double]): Double = {
+      import kollflitz.Ops._
+      val mean = in.mean
+      if (Util.coin(mean)) 1.0 else 0.0
+    }
+
+    def perform(oldVec: Vec[Double], coin: Double, oldOpt: Option[DoubleVector[I]], key: String): Unit = {
+      val i       = oldVec.indexWhere(_ != coin)
+      val newVal  = oldVec.patch(i, coin :: Nil, 1)
+      oldOpt match {
+        case Some(DoubleVector.Var(vr)) => vr() = newVal
+        case _ => aAdapt1.put(key, DoubleVector.newVar[I](newVal))
+      }
+    }
+
+    if (forgetLo || forgetHi) {
+      // make sure lo and hi use opposite coins
+      val coinLo = meanCoin(oldLo)
+      val coinHi = 1.0 - coinLo
+      if (forgetLo) perform(oldLo, coinLo, oldLoOpt, attrLo)
+      if (forgetHi) perform(oldHi, coinHi, oldHiOpt, attrHi)
+    }
+    if (forgetAbs) {
+      val coinAbs = meanCoin(oldAbs)
+      perform(oldAbs, coinAbs, oldAbsOpt, attrAbs)
+    }
+
+    if (forgetLo || forgetHi || forgetAbs) {
+      scheduleForget()
+    }
+  }
+
+  @inline
+  private def allSame(vec: Vec[Double]): Boolean = {
+    val a = vec.head
+    vec.forall(_ == a)
   }
 
   def spreadVecLin(in: Double, lo: Double, hi: Double): Vec[Double] = {
@@ -202,6 +358,9 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
   private[this] val vecOne  = Vec.fill(numChannels)(1.0)
 
   private[this] val attrMix = "mix"
+  private[this] val attrLo  = "lo"
+  private[this] val attrHi  = "hi"
+  private[this] val attrAbs = "abs"
 
   private[this] val refTestToken = Ref(-1)
 
@@ -426,89 +585,6 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       pPred.attr.put(mainIn, oGenNew)
     }
   }
-
-//  def changeNegatumOLD()(implicit tx: S#Tx): Unit = {
-//    implicit val itx: I#Tx = bridge(tx)
-//    val nOpt = panel.nodes.find(_.name.startsWith("n-"))
-//    nOpt.fold[Unit](println("Ooops. Not found")) { nGenOld =>
-//      val pIdx = (math.random() * numProcs).toInt
-//      val grProc  = grProcH()
-//      val pGen0SOpt  = grProc.at(pIdx).flatMap { e =>
-//        e.value match {
-//          case p: Proc[S] => Some(p)
-//          case _ => None
-//        }
-//      }
-//
-//      pGen0SOpt.foreach { pGen0S =>
-////        val pOld = nGenOld.obj
-//
-//        val mapOut: Map[String, Set[(Obj.AttrMap[I], String)]] = nGenOld.outputs.map { case (keyOut, nOutOld) =>
-//          val outOld  = nOutOld.output
-//          val set = nOutOld.mappings.flatMap { nAttrIn =>
-//            val nAttr = nAttrIn.attribute
-//            val keyIn = nAttr.key
-//            val pCol  = nAttr.parent.obj //  nAttrIn.input
-//            val aCol  = pCol.attr
-//            aCol.get(keyIn) match {
-//              case Some(f: Folder[I]) if f.iterator.contains(outOld) =>
-////                if (f.size > 1) f.remove(outOld) else aCol.remove(keyIn)
-//                Some((aCol, keyIn))
-//
-//              case Some(o: Output[I]) if o == outOld =>
-////                aCol.remove(keyIn)
-//                Some((aCol, keyIn))
-//
-//              case _ =>
-//                println("Huh?")
-//                None
-//            }
-//          }
-//
-//          keyOut -> set
-//        }
-//
-//        val cpy     = Copy[S, I]
-//        val pGenNew = cpy(pGen0S)
-//        cpy.finish()
-//
-//        if (config.display) {
-//          val aggrOld = nGenOld.aggregate
-//          if (aggrOld != null) {
-//            val bOld  = aggrOld.getBounds
-//            val ptNew = new Point2D.Double(bOld.getCenterX, bOld.getCenterY)
-//            panel.prepareAndLocate(pGenNew, ptNew)
-//          }
-//        }
-//
-//        nGenOld.removeSelf()
-//
-////        panel.nuages.surface match {
-////          case fRoot: Nuages.Surface.Folder[I] =>
-////            fRoot.peer.remove(pOld)
-////
-////          case _: Nuages.Surface.Timeline[I] => ???
-////        }
-//        panel.addNewObject(pGenNew)
-//
-//        mapOut.foreach { case (keyOut, set) =>
-//          val outNew = pGenNew.outputs.add(keyOut)
-//          set.foreach { case (aCol, keyIn) =>
-//            aCol.get(keyIn) match {
-//              case Some(f: Folder[I]) => f.addLast(outNew)
-//              case Some(other) =>
-//                val f = Folder[I]()
-//                f.addLast(other)
-//                f.addLast(outNew)
-//                aCol.put(keyIn, f)
-//              case None =>
-//                aCol.put(keyIn, outNew)
-//            }
-//          }
-//        }
-//      }
-//    }
-//  }
 
   private def createBasicStructure()(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer

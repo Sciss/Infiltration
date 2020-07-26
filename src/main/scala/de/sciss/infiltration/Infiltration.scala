@@ -131,13 +131,22 @@ object Infiltration {
         descrYes = "Show visual display", default = Some(default.display),
       )
       val highPass: Opt[Int] = opt("high-pass", default = Some(default.highPass),
-        descr = "High-pass cut-off frequency or zero"
+        descr = s"High-pass cut-off frequency or zero (default ${default.highPass})"
       )
       val sensorNoiseFloor: Opt[Float] = opt("sensor-noise-floor", default = Some(default.sensorNoiseFloor),
-        descr = "Noise floor level below which sensors are interpreted as off"
+        descr = s"Noise floor level below which sensors are interpreted as off (default: ${default.sensorNoiseFloor})"
       )
-      val sensorTrigThresh: Opt[Float] = opt("sensor-trig-thresh", default = Some(default.sensorTrigThresh),
-        descr = "Trigger threshold for sensors"
+      val sensorTrigThreshUp: Opt[Float] = opt("sensor-trig-thresh-up", default = Some(default.sensorTrigThreshUp),
+        descr = s"Trigger threshold for sensors (rising slope) (default: ${default.sensorTrigThreshUp})"
+      )
+      val sensorTrigThreshDn: Opt[Float] = opt("sensor-trig-thresh-dn", default = Some(default.sensorTrigThreshDn),
+        descr = s"Trigger threshold for sensors (falling slope) (default: ${default.sensorTrigThreshDn})"
+      )
+      val flipTrigDurSec: Opt[Int] = opt("flip-trig-dur", default = Some(default.flipTrigDurSec),
+        descr = s"Maximum duration in seconds of opposite triggers to flip adaptation (default: ${default.flipTrigDurSec})"
+      )
+      val forgetDurSec: Opt[Int] = opt("forget-dur", default = Some(default.forgetDurSec),
+        descr = s"Duration of forgetting step in seconds (default: ${default.forgetDurSec})"
       )
 
       verify()
@@ -155,7 +164,10 @@ object Infiltration {
         display             = display(),
         highPass            = highPass(),
         sensorNoiseFloor    = sensorNoiseFloor(),
-        sensorTrigThresh    = sensorTrigThresh(),
+        sensorTrigThreshUp  = sensorTrigThreshUp(),
+        sensorTrigThreshDn  = sensorTrigThreshDn(),
+        flipTrigDurSec      = flipTrigDurSec(),
+        forgetDurSec        = forgetDurSec(),
       )
     }
 
