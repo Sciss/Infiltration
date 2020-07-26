@@ -229,6 +229,8 @@ object Infiltration {
 //        nCfg.mainSynth      = false
         nCfg.mainSynth      = true
         nCfg.showTransport  = false
+        nCfg.showFrame      = config.display
+        nCfg.meters         = config.display
         sCfg.highPass       = config.highPass
         aCfg.deviceName     = Some("Infiltration")
       }

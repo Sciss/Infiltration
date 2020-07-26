@@ -40,3 +40,6 @@ sendAll(osc.Message("/start"))
 
 
 // 1: 43, 2: 42, 3: 40, 4: 44
+
+
+sendAll(osc.Message("/shutdown"))

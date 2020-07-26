@@ -93,6 +93,11 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     createBasicStructure()
 //    deferBi { (tx, itx) => runProgram() }
     autoRunNext()
+
+    tx.afterCommit {
+      server.peer.dumpTree(controls = true)
+    }
+
     this
   }
 
