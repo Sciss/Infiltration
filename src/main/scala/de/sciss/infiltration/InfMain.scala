@@ -13,19 +13,19 @@
 
 package de.sciss.infiltration
 
-import java.awt.geom.Point2D
 import java.net.InetSocketAddress
 
 import de.sciss.kollflitz.Vec
 import de.sciss.lucre.expr.{DoubleVector, IntObj}
 import de.sciss.lucre.stm
-import de.sciss.lucre.stm.{Copy, Folder, Obj}
+import de.sciss.lucre.stm.{Copy, Folder}
 import de.sciss.lucre.synth.{Server, Sys}
-import de.sciss.synth.{Curve, FillValue, message}
 import de.sciss.nuages.NuagesView
 import de.sciss.numbers
 import de.sciss.synth.proc.Implicits._
+import de.sciss.synth.proc.Proc.{mainIn, mainOut}
 import de.sciss.synth.proc.{EnvSegment, Grapheme, Output, Proc, Scheduler, TimeRef}
+import de.sciss.synth.{Curve, FillValue, message}
 
 import scala.concurrent.stm.{InTxn, Ref}
 import scala.swing.Swing
@@ -62,8 +62,9 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
   private[this] val refGen      = Ref.make[ProcH]()
   private[this] val refFltFade  = Ref(Option.empty[Fade])
 
-  private[this] var hndIn : ProcH = _
-  private[this] var hndOut: ProcH = _
+  private[this] var hndIn     : ProcH = _
+  private[this] var hndOut    : ProcH = _
+  private[this] var hndAdapt1 : ProcH = _
 
   private[this] implicit val random: Random = new Random()
 
@@ -149,7 +150,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
 
   private def procOutput(p: Proc[I])(implicit tx: S#Tx): Output[I] = {
     implicit val itx: I#Tx  = bridge(tx)
-    p.outputs.add(Proc.mainOut)
+    p.outputs.add(mainOut)
   }
 
   private[this] val vecZero = Vec.fill(numChannels)(0.0)
@@ -197,7 +198,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
     implicit val tx0: InTxn = tx.peer
     implicit val itx: I#Tx  = bridge(tx)
 
-    (refFilter().isEmpty) && {
+    refFilter().isEmpty && {
       val (name, keyFreq, keyQ) = Util.rangeRand(0, 4) match {
         case 0 => ("L-hpf", ""    , ""  )
         case 1 => ("L-lpf", ""    , ""  )
@@ -216,7 +217,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
         val pFlt  = cpy(pFlt0)
         cpy.finish()
         val aFlt  = pFlt.attr
-        val oFlt  = pFlt.outputs.add(Proc.mainOut)
+        val oFlt  = pFlt.outputs.add(mainOut)
 
         val freq0   = Util.rangeRand(0.0, 1.0)
         val freqV   = spreadVecLin(freq0, 0.0, 1.0)
@@ -233,11 +234,11 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
         }
 
         val oGen = genOutput()
-        aFlt.put(Proc.mainIn, oGen)
+        aFlt.put(mainIn, oGen)
         val surface = surfaceH()
         surface.addLast(pFlt)
         val out = hndOut()
-        out.attr.put(Proc.mainIn, oFlt)
+        out.attr.put(mainIn, oFlt)
         val pFltH = itx.newHandle(pFlt)
         val mixVal = if (hasFreq) vecOne else freqV
 
@@ -296,7 +297,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
     val pFlt  = pFltH()
     val oGen  = genOutput()
     val out = hndOut()
-    out.attr.put(Proc.mainIn, oGen)
+    out.attr.put(mainIn, oGen)
     val surface = surfaceH()
     surface.remove(pFlt)
     refFilter() = None
@@ -343,96 +344,114 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
       val surface   = surfaceH()
       val pGenOld   = refGen.swap(itx.newHandle(pGenNew)).apply()
       val pPred     = refFilter().getOrElse(hndOut).apply()
-      val oGenNew   = pGenNew.outputs.add(Proc.mainOut)
+      val oGenNew   = pGenNew.outputs.add(mainOut)
+      val oAdapt1   = hndAdapt1().outputs.add(mainOut)
+      val aGenNew   = pGenNew.attr
+      val numParam  =
+        if      (aGenNew.contains("p5")) 5
+        else if (aGenNew.contains("p4")) 4
+        else if (aGenNew.contains("p3")) 3
+        else if (aGenNew.contains("p2")) 2
+        else if (aGenNew.contains("p1")) 1
+        else 0  // huh...
+
+      if (numParam > 0) {
+        val paramWSum = (numParam * (numParam + 1)) / 2
+        val parWSeq   = 0 until numParam
+        val parWFun   = (i: Int) => (numParam - i).toDouble / paramWSum
+        val parIdx = Util.weightedChoose(parWSeq)(parWFun)
+//        println(s"parIdx = $parIdx; sum ${parWSeq.map(parWFun).sum}")
+        aGenNew.put(s"p${parIdx + 1}", oAdapt1)
+      }
 
       surface.remove  (pGenOld)
       surface.addLast (pGenNew)
-      pPred.attr.put(Proc.mainIn, oGenNew)
+      pPred.attr.put(mainIn, oGenNew)
     }
   }
 
-  def changeNegatumOLD()(implicit tx: S#Tx): Unit = {
-    implicit val itx: I#Tx = bridge(tx)
-    val nOpt = panel.nodes.find(_.name.startsWith("n-"))
-    nOpt.fold[Unit](println("Ooops. Not found")) { nGenOld =>
-      val pIdx = (math.random() * numProcs).toInt
-      val grProc  = grProcH()
-      val pGen0SOpt  = grProc.at(pIdx).flatMap { e =>
-        e.value match {
-          case p: Proc[S] => Some(p)
-          case _ => None
-        }
-      }
-
-      pGen0SOpt.foreach { pGen0S =>
-//        val pOld = nGenOld.obj
-
-        val mapOut: Map[String, Set[(Obj.AttrMap[I], String)]] = nGenOld.outputs.map { case (keyOut, nOutOld) =>
-          val outOld  = nOutOld.output
-          val set = nOutOld.mappings.flatMap { nAttrIn =>
-            val nAttr = nAttrIn.attribute
-            val keyIn = nAttr.key
-            val pCol  = nAttr.parent.obj //  nAttrIn.input
-            val aCol  = pCol.attr
-            aCol.get(keyIn) match {
-              case Some(f: Folder[I]) if f.iterator.contains(outOld) =>
-//                if (f.size > 1) f.remove(outOld) else aCol.remove(keyIn)
-                Some((aCol, keyIn))
-
-              case Some(o: Output[I]) if o == outOld =>
-//                aCol.remove(keyIn)
-                Some((aCol, keyIn))
-
-              case _ =>
-                println("Huh?")
-                None
-            }
-          }
-
-          keyOut -> set
-        }
-
-        val cpy     = Copy[S, I]
-        val pGenNew = cpy(pGen0S)
-        cpy.finish()
-
-        if (config.display) {
-          val aggrOld = nGenOld.aggregate
-          if (aggrOld != null) {
-            val bOld  = aggrOld.getBounds
-            val ptNew = new Point2D.Double(bOld.getCenterX, bOld.getCenterY)
-            panel.prepareAndLocate(pGenNew, ptNew)
-          }
-        }
-
-        nGenOld.removeSelf()
-
-//        panel.nuages.surface match {
-//          case fRoot: Nuages.Surface.Folder[I] =>
-//            fRoot.peer.remove(pOld)
-//
-//          case _: Nuages.Surface.Timeline[I] => ???
+//  def changeNegatumOLD()(implicit tx: S#Tx): Unit = {
+//    implicit val itx: I#Tx = bridge(tx)
+//    val nOpt = panel.nodes.find(_.name.startsWith("n-"))
+//    nOpt.fold[Unit](println("Ooops. Not found")) { nGenOld =>
+//      val pIdx = (math.random() * numProcs).toInt
+//      val grProc  = grProcH()
+//      val pGen0SOpt  = grProc.at(pIdx).flatMap { e =>
+//        e.value match {
+//          case p: Proc[S] => Some(p)
+//          case _ => None
 //        }
-        panel.addNewObject(pGenNew)
-
-        mapOut.foreach { case (keyOut, set) =>
-          val outNew = pGenNew.outputs.add(keyOut)
-          set.foreach { case (aCol, keyIn) =>
-            aCol.get(keyIn) match {
-              case Some(f: Folder[I]) => f.addLast(outNew)
-              case Some(other) =>
-                val f = Folder[I]()
-                f.addLast(other)
-                f.addLast(outNew)
-                aCol.put(keyIn, f)
-              case None =>
-                aCol.put(keyIn, outNew)
-            }
-          }
-        }
-      }
-    }
-  }
+//      }
+//
+//      pGen0SOpt.foreach { pGen0S =>
+////        val pOld = nGenOld.obj
+//
+//        val mapOut: Map[String, Set[(Obj.AttrMap[I], String)]] = nGenOld.outputs.map { case (keyOut, nOutOld) =>
+//          val outOld  = nOutOld.output
+//          val set = nOutOld.mappings.flatMap { nAttrIn =>
+//            val nAttr = nAttrIn.attribute
+//            val keyIn = nAttr.key
+//            val pCol  = nAttr.parent.obj //  nAttrIn.input
+//            val aCol  = pCol.attr
+//            aCol.get(keyIn) match {
+//              case Some(f: Folder[I]) if f.iterator.contains(outOld) =>
+////                if (f.size > 1) f.remove(outOld) else aCol.remove(keyIn)
+//                Some((aCol, keyIn))
+//
+//              case Some(o: Output[I]) if o == outOld =>
+////                aCol.remove(keyIn)
+//                Some((aCol, keyIn))
+//
+//              case _ =>
+//                println("Huh?")
+//                None
+//            }
+//          }
+//
+//          keyOut -> set
+//        }
+//
+//        val cpy     = Copy[S, I]
+//        val pGenNew = cpy(pGen0S)
+//        cpy.finish()
+//
+//        if (config.display) {
+//          val aggrOld = nGenOld.aggregate
+//          if (aggrOld != null) {
+//            val bOld  = aggrOld.getBounds
+//            val ptNew = new Point2D.Double(bOld.getCenterX, bOld.getCenterY)
+//            panel.prepareAndLocate(pGenNew, ptNew)
+//          }
+//        }
+//
+//        nGenOld.removeSelf()
+//
+////        panel.nuages.surface match {
+////          case fRoot: Nuages.Surface.Folder[I] =>
+////            fRoot.peer.remove(pOld)
+////
+////          case _: Nuages.Surface.Timeline[I] => ???
+////        }
+//        panel.addNewObject(pGenNew)
+//
+//        mapOut.foreach { case (keyOut, set) =>
+//          val outNew = pGenNew.outputs.add(keyOut)
+//          set.foreach { case (aCol, keyIn) =>
+//            aCol.get(keyIn) match {
+//              case Some(f: Folder[I]) => f.addLast(outNew)
+//              case Some(other) =>
+//                val f = Folder[I]()
+//                f.addLast(other)
+//                f.addLast(outNew)
+//                aCol.put(keyIn, f)
+//              case None =>
+//                aCol.put(keyIn, outNew)
+//            }
+//          }
+//        }
+//      }
+//    }
+//  }
 
   private def createBasicStructure()(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
@@ -441,11 +460,13 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
     val pIdx      = refGraphPos()
     val n         = panel.nuages
     val fGen      = n.generators.get
+    val fFlt      = n.filters   .get
     val fCol      = n.collectors.get
     val grProc    = grProcH()
 
     val programOpt = for {
       pIn0    <- fGen.$[Proc]("in")
+      pAdapt0 <- fFlt.$[Proc]("adapt")
       pGen0S  <- grProc.at(pIdx).flatMap { e =>
         e.value match {
           case p: Proc[S] => Some(p)
@@ -457,27 +478,37 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
 //          val g0 = pGen0S.graph.value
 //          val pGen0 = Proc[I]()
 //          pGen0.graph() = g0
-      val cpyS  = Copy[S, I]
-      val pGen  = cpyS(pGen0S)
+      val cpyS    = Copy[S, I]
+      val pGen    = cpyS(pGen0S)
       cpyS.finish()
-      val cpyI  = Copy[I, I]
-      val pOut  = cpyI(pOut0)
-      val pIn   = cpyI(pIn0)
+      val cpyI    = Copy[I, I]
+      val pOut    = cpyI(pOut0)
+      val pIn     = cpyI(pIn0)
+      val pAdapt  = cpyI(pAdapt0)
       cpyI.finish()
-      pOut.attr.put(Proc.mainIn, pGen.outputs.add(Proc.mainOut))
-      pIn .attr.put("$bal-bus", IntObj.newConst(ciBal))
+      val aAdapt  = pAdapt.attr
+      val aIn     = pIn   .attr
+      val aOut    = pOut  .attr
+      aOut  .put(mainIn, pGen.outputs.add(mainOut))
+      aIn   .put("$bal-bus"   , IntObj      .newConst (ciBal))
+      aAdapt.put("gain"       , DoubleVector.newVar   (Vec.fill(numChannels)(0.8)))
+      aAdapt.put(mainIn  , pIn.outputs.add(mainOut))
+//      aAdapt.put(attrMix      , DoubleObj   .newVar(1.0))
+      aAdapt.put(attrMix      , DoubleVector.newVar(vecOne))
 
 //      panel.createGenerator(pGen0 , Some(pCol0) , new Point(200, 200))
 //      panel.createGenerator(pIn0  , None        , new Point(400, 200))
 
       val surface = surfaceH()
-      surface.addLast(pOut)
-      surface.addLast(pGen)
-      surface.addLast(pIn)
+      surface.addLast(pOut  )
+      surface.addLast(pGen  )
+      surface.addLast(pIn   )
+      surface.addLast(pAdapt)
 
       refGen()  = itx.newHandle(pGen)
       hndOut    = itx.newHandle(pOut)
       hndIn     = itx.newHandle(pIn)
+      hndAdapt1 = itx.newHandle(pAdapt)
 
       ()
     }

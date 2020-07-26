@@ -76,6 +76,19 @@ object Util {
   def choose[A](seq: Seq[A])(implicit random: Random): A =
     seq(random.nextInt(seq.size))
 
+  def weightedChoose[A](seq: Seq[A])(fun: A => Double)(implicit random: Random): A = {
+    val i    = random.nextDouble()
+    var sum  = 0.0
+    var e: A = null.asInstanceOf[A]
+    val it = seq.iterator
+    while (it.hasNext) {
+      e = it.next()
+      sum += fun(e)
+      if (sum >= i) return e
+    }
+    e
+  }
+
   def wordWrap(s: String, margin: Int = 80): String = {
     val sz = s.length
     if (sz <= margin) return s
