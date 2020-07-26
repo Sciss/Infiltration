@@ -17,17 +17,18 @@ import java.awt.geom.Point2D
 import java.net.InetSocketAddress
 
 import de.sciss.kollflitz.Vec
-import de.sciss.lucre.expr.DoubleVector
+import de.sciss.lucre.expr.{DoubleVector, IntObj}
 import de.sciss.lucre.stm
 import de.sciss.lucre.stm.{Copy, Folder, Obj}
 import de.sciss.lucre.synth.{Server, Sys}
+import de.sciss.synth.{Curve, FillValue, message}
 import de.sciss.nuages.NuagesView
 import de.sciss.numbers
-import de.sciss.synth.Curve
 import de.sciss.synth.proc.Implicits._
 import de.sciss.synth.proc.{EnvSegment, Grapheme, Output, Proc, Scheduler, TimeRef}
 
 import scala.concurrent.stm.{InTxn, Ref}
+import scala.swing.Swing
 import scala.util.Random
 
 class InfMain[S <: Sys[S], I <: Sys[I]](
@@ -39,6 +40,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
                             numProcs          : Int,
                             scheduler         : Scheduler[S],
                             surfaceH          : stm.Source[I#Tx, Folder[I]],
+                            ciBal             : Int,
                           )(implicit cursor: stm.Cursor[S], /*cursorI: stm.Cursor[I],*/ bridge: S#Tx => I#Tx)
   extends /*Main with*/ SoundScene {
 
@@ -69,12 +71,55 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
 
   def init()(implicit tx: S#Tx): this.type = {
     tx.afterCommit {
-      val c = OscClient(this, config, localSocketAddress)
-      c.init()
+      OscClient(this, config, localSocketAddress).init()
+      Sensors  (this, config).init()
     }
     createBasicStructure()
 //    deferBi { (tx, itx) => runProgram() }
     this
+  }
+
+  private[this] val sensorThresh = config.sensorNoiseFloor
+
+  def sensorUpdate(data: Array[Float]): Unit = {
+    //println(data.mkString(", "))
+    var count = 0
+    var dir   = 0f
+    val t     = sensorThresh
+    val a0    = data(0)
+    val a1    = data(1)
+    val a2    = data(2)
+    val a3    = data(3)
+    val b0    = data(4)
+    val b1    = data(5)
+    val b2    = data(6)
+    val b3    = data(7)
+    if (a0 > t || b0 > t) {
+      dir   += a0 / (a0 + b0)
+      count += 1
+    }
+    if (a1 > t || b1 > t) {
+      dir   += a1 / (a1 + b1)
+      count += 1
+    }
+    if (a2 > t || b2 > t) {
+      dir   += a2 / (a2 + b2)
+      count += 1
+    }
+    if (a3 > t || b3 > t) {
+      dir   += a3 / (a3 + b3)
+      count += 1
+    }
+    if (count > 0) {
+      dir /= count  // fully a: 1.0, fully b: 0.0
+      val vBal = dir * 2 - 1  // -1 ... +1
+//      println(s"vBal = $vBal")
+      server ! message.ControlBusSet(FillValue(ciBal, vBal))
+      if (config.display) Swing.onEDT {
+        // let's appropriate that rotary dial, LOL
+        panel.glideTime = dir * 2 // 0 .. 1
+      }
+    }
   }
 
   def spreadVecLin(in: Double, lo: Double, hi: Double): Vec[Double] = {
@@ -221,7 +266,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
   }
 
   private def mkFade(fdRef: Ref[Option[Fade]], startVal: Vec[Double], endVal: Vec[Double], dur: Double)
-                    (done: S#Tx => Unit = _ => ())
+                    (done: S#Tx => Unit /*= _ => ()*/)
                     (implicit tx: S#Tx): Grapheme[I] = {
     implicit val tx0: InTxn = tx.peer
     implicit val itx: I#Tx  = bridge(tx)
@@ -420,6 +465,7 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
       val pIn   = cpyI(pIn0)
       cpyI.finish()
       pOut.attr.put(Proc.mainIn, pGen.outputs.add(Proc.mainOut))
+      pIn .attr.put("$bal-bus", IntObj.newConst(ciBal))
 
 //      panel.createGenerator(pGen0 , Some(pCol0) , new Point(200, 200))
 //      panel.createGenerator(pIn0  , None        , new Point(400, 200))

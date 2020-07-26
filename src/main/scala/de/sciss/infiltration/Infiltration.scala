@@ -21,8 +21,9 @@ import de.sciss.lucre.stm.Folder
 import de.sciss.lucre.stm.store.BerkeleyDB
 import de.sciss.lucre.synth.{Server, Txn}
 import de.sciss.mellite.Mellite
-import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, WolkenpumpeMain, LinearWarp => LinWarp}
+import de.sciss.nuages.{DSL, ExpWarp, IntWarp, NamedBusConfig, Nuages, ParamSpec, ParametricWarp, ScissProcs, Util, WolkenpumpeMain}
 import de.sciss.synth.proc.Implicits._
+import de.sciss.synth.proc.graph.Attribute
 import de.sciss.synth.proc.{AuralSystem, Durable, Grapheme, Scheduler, SoundProcesses, Universe, Workspace}
 import de.sciss.synth.ugen.{ControlValues, LinXFade2}
 import de.sciss.synth.{GE, proc, Server => SServer}
@@ -82,6 +83,9 @@ object Infiltration {
       val dumpOsc: Opt[Boolean] = toggle("dump-osc",
         descrYes = "Dump OSC traffic", default = Some(default.dumpOsc),
       )
+      val dumpSensors: Opt[Boolean] = toggle("dump-sensors",
+        descrYes = "Dump OSC traffic from sensors", default = Some(default.dumpSensors),
+      )
       val isLaptop: Opt[Boolean] = toggle("laptop",
         descrYes = "Running from laptop", default = Some(default.isLaptop),
       )
@@ -116,11 +120,15 @@ object Infiltration {
       val highPass: Opt[Int] = opt("high-pass", default = Some(default.highPass),
         descr = "High-pass cut-off frequency or zero"
       )
+      val sensorNoiseFloor: Opt[Float] = opt("sensor-noise-floor", default = Some(default.sensorNoiseFloor),
+        descr = "Noise floor level below which sensors are interpreted as off"
+      )
 
       verify()
       val config: Config = Config(
         baseDir             = baseDir(),
         dumpOsc             = dumpOsc(),
+        dumpSensors         = dumpSensors(),
         isLaptop            = isLaptop(),
         disableEnergySaving = disableEnergySaving(),
         qjLaunch            = qjLaunch(),
@@ -129,6 +137,7 @@ object Infiltration {
         log                 = log(),
         display             = display(),
         highPass            = highPass(),
+        sensorNoiseFloor    = sensorNoiseFloor(),
       )
     }
 
@@ -357,12 +366,16 @@ object Infiltration {
         generator("in") {
           import de.sciss.synth.ugen._
           val pBoost  = pAudio("gain" , ParamSpec( 0.1, 10, ExpWarp), default(1.0))
-          val pBal    = pAudio("bal"  , ParamSpec(-1.0, 1.0, LinWarp), default(0.0))
+//          val pBal    = pAudio("bal"  , ParamSpec(-1.0, 1.0, LinWarp), default(0.0))
           val sig0    = In.ar(NumOutputBuses.ir, 2)
           val sig     = LeakDC.ar(sig0)
           val sigL    = sig.out(0)
           val sigR    = sig.out(1)
-          val vBal    = pBal.out(0)
+//          val vBal    = pBal.out(0)
+          // we can't get a direct n_map, so let's supply the bus as argument
+          val vBalBus = Attribute.ar("$bal-bus", 0.0, fixed = true)
+          val vBal    = In.kr(vBalBus)
+//          vBal.poll(2, "vBal")
           val vBoost  = pBoost.out(0)
           val balance = Balance2.ar(sigL, sigR, pos = vBal, level = vBoost)
           val sum     = balance.left + balance.right
@@ -513,6 +526,9 @@ object Infiltration {
 //          val synPostM = Synth.play(dfPostM, Some("post-main"))(server.defaultGroup, addAction = addAfter)
 //          panel.mainSynth = Some(synPostM)
 
+          val ciBal = server.allocControlBus(1)
+          // server ! message.ControlBusSet(FillValue(ciBal, 0.0f))  // init
+
           tx.afterCommit {
             SoundProcesses.step[S]("init infiltration") { implicit tx =>
               implicit val tx0: InTxn = tx.peer
@@ -527,6 +543,7 @@ object Infiltration {
                 numProcs  = numProcs,
                 scheduler = Scheduler[S](),
                 surfaceH  = itx.newHandle(surface),
+                ciBal     = ciBal,
               ).init()
 
               infR() = Some(inf)

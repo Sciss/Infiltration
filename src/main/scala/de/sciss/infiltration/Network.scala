@@ -21,6 +21,8 @@ import de.sciss.kollflitz.Vec
 import de.sciss.osc
 
 object Network {
+  final val SensorsPort = 6666
+  
   /** Maps MAC addresses to IP addresses */
   final val macToIPMap: Map[String, String] = Map(
     "dc:a6:32:59:9a:92" -> "192.168.0.30",
@@ -169,6 +171,30 @@ object Network {
       case _ => None
     }
   }
+
+  object OscSensors {
+    private[this] val Name = "/infiltration"
+
+//    private[this] val empty = new OscSensors(new Array(0))
+
+    def unapply(p: osc.Packet): Option[Array[Float]] = p match {
+      case osc.Message(Name, 
+        a0: Float, a1: Float, a2: Float, a3: Float,
+        b0: Float, b1: Float, b2: Float, b3: Float,
+        _ @ _*) =>
+
+        val data = new Array[Float](8)
+        data(0) = a0; data(1) = a1; data(2) = a2; data(3) = a3
+        data(4) = b0; data(5) = b1; data(6) = b2; data(7) = b3
+        Some(data)
+        
+      case _ => None
+    }
+  }
+//  final class OscSensors(val data: Array[Float]) {
+////    def get: Array[Float] = data
+////    def isEmpty: Boolean  = data.isEmpty
+//  }
 
   object OscSetVolume {
     private[this] val Name = "/set-volume"

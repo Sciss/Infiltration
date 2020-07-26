@@ -27,4 +27,6 @@ trait SoundScene {
   def testChannel(ch: Int): Boolean
 
   def serverInfo(): String
+
+  def sensorUpdate(data: Array[Float]): Unit
 }

@@ -20,6 +20,7 @@ import de.sciss.file._
 case class Config(
                    baseDir              : File          = userHome/"Documents"/"projects"/"Infiltration",
                    dumpOsc              : Boolean       = false,
+                   dumpSensors          : Boolean       = false,
                    isLaptop             : Boolean       = false,
                    disableEnergySaving  : Boolean       = true,
                    qjLaunch             : Boolean       = false,
@@ -28,6 +29,7 @@ case class Config(
                    log                  : Boolean       = false,
                    display              : Boolean       = true,
                    highPass             : Int           = 0,
+                   sensorNoiseFloor     : Float         = 1.0e-3f,
                  ) {
 
 }
