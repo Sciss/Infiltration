@@ -1,6 +1,6 @@
 lazy val commonSettings = Seq(
   name               := "Infiltration",
-  version            := "0.1.0-SNAPSHOT",
+  version            := "0.1.0",
   organization       := "de.sciss",
   scalaVersion       := "2.13.3",
   licenses           := Seq("AGPL v3+" -> url("http://www.gnu.org/licenses/agpl-3.0.txt")),
@@ -22,12 +22,12 @@ lazy val buildInfoSettings = Seq(
 
 lazy val deps = new {
   val fscape          = "2.36.1"
-  val lucre           = "3.17.6-SNAPSHOT"
+  val lucre           = "3.17.6"
   val melliteApp      = "2.48.2"
   val negatum         = "0.15.5"
   val soundProcesses  = "3.35.8"
   val submin          = "0.3.4"
-  val wolkenpumpe     = "2.41.2-SNAPSHOT"
+  val wolkenpumpe     = "2.41.2"
 }
 
 lazy val root = project.in(file("."))
