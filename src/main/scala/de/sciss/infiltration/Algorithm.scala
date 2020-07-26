@@ -1,5 +1,5 @@
 /*
- *  InfMain.scala
+ *  Algorithm.scala
  *  (in|filtration)
  *
  *  Copyright (c) 2019-2020 Hanns Holger Rutz. All rights reserved.
@@ -14,6 +14,8 @@
 package de.sciss.infiltration
 
 import java.net.InetSocketAddress
+import java.text.SimpleDateFormat
+import java.util.{Date, Locale}
 
 import de.sciss.kollflitz.Vec
 import de.sciss.lucre.expr.{DoubleVector, IntObj}
@@ -27,11 +29,12 @@ import de.sciss.synth.proc.Proc.{mainIn, mainOut}
 import de.sciss.synth.proc.{EnvSegment, Grapheme, Output, Proc, Scheduler, TimeRef}
 import de.sciss.synth.{Curve, FillValue, message}
 
+import scala.annotation.elidable
 import scala.concurrent.stm.{InTxn, Ref}
 import scala.swing.Swing
 import scala.util.Random
 
-class InfMain[S <: Sys[S], I <: Sys[I]](
+class Algorithm[S <: Sys[S], I <: Sys[I]](
                             view: NuagesView[I],
                             server            : Server,
                             localSocketAddress: InetSocketAddress,
@@ -70,6 +73,17 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
 
   private[this] val refGraphPos = Ref((math.random() * numProcs).toInt)
 
+  private[this] val showLog = config.log
+
+  private[this] val logHeader = new SimpleDateFormat(s"[HH:mm''ss.SSS] [${config.dot}] ", Locale.US)
+
+  @elidable(elidable.CONFIG) def log(what: => String): Unit =
+    if (showLog) {
+      val msg = logHeader.format(new Date()) + what
+      println(msg)
+      // if (remoteLogFun.isDefined) remoteLogFun.foreach(_.apply(msg))
+    }
+
   def init()(implicit tx: S#Tx): this.type = {
     tx.afterCommit {
       OscClient(this, config, localSocketAddress).init()
@@ -77,16 +91,36 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
     }
     createBasicStructure()
 //    deferBi { (tx, itx) => runProgram() }
+    autoRunNext()
     this
   }
 
-  private[this] val sensorThresh = config.sensorNoiseFloor
+  private[this] val sensorNoiseFloor  = config.sensorNoiseFloor
+  private[this] val sensorTrigThresh  = config.sensorTrigThresh
+
+//  @volatile
+//  private[this] var trigTimeA0 = 0L
+//  private[this] var trigTimeA1 = 0L
+//  private[this] var trigTimeA2 = 0L
+//  private[this] var trigTimeA3 = 0L
+//  private[this] var trigTimeB0 = 0L
+//  private[this] var trigTimeB1 = 0L
+//  private[this] var trigTimeB2 = 0L
+//  private[this] var trigTimeB3 = 0L
+
+  private[this] val trigTimes = new Array[Long](8)
+
+  private[this] val maxJumpTrigSpan   = 10 * 60000L // milliseconds
+  private[this] val minJumpTrigPause  = 15 * 60000L // milliseconds
+  private[this] val minJumpNumTrig    = 6
+
+  private[this] val timeJumpGraph = Ref(0L)
 
   def sensorUpdate(data: Array[Float]): Unit = {
     //println(data.mkString(", "))
-    var count = 0
-    var dir   = 0f
-    val t     = sensorThresh
+    var countBal  = 0
+    var balBase   = 0f
+    val tBal  = sensorNoiseFloor
     val a0    = data(0)
     val a1    = data(1)
     val a2    = data(2)
@@ -95,32 +129,43 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
     val b1    = data(5)
     val b2    = data(6)
     val b3    = data(7)
-    if (a0 > t || b0 > t) {
-      dir   += a0 / (a0 + b0)
-      count += 1
+    if (a0 > tBal || b0 > tBal) {
+      balBase   += a0 / (a0 + b0)
+      countBal += 1
     }
-    if (a1 > t || b1 > t) {
-      dir   += a1 / (a1 + b1)
-      count += 1
+    if (a1 > tBal || b1 > tBal) {
+      balBase   += a1 / (a1 + b1)
+      countBal += 1
     }
-    if (a2 > t || b2 > t) {
-      dir   += a2 / (a2 + b2)
-      count += 1
+    if (a2 > tBal || b2 > tBal) {
+      balBase   += a2 / (a2 + b2)
+      countBal += 1
     }
-    if (a3 > t || b3 > t) {
-      dir   += a3 / (a3 + b3)
-      count += 1
+    if (a3 > tBal || b3 > tBal) {
+      balBase   += a3 / (a3 + b3)
+      countBal += 1
     }
-    if (count > 0) {
-      dir /= count  // fully a: 1.0, fully b: 0.0
-      val vBal = dir * 2 - 1  // -1 ... +1
+    if (countBal == 0) return
+
+    balBase /= countBal  // fully a: 1.0, fully b: 0.0
+    val vBal = balBase * 2 - 1  // -1 ... +1
 //      println(s"vBal = $vBal")
-      server ! message.ControlBusSet(FillValue(ciBal, vBal))
-      if (config.display) Swing.onEDT {
-        // let's appropriate that rotary dial, LOL
-        panel.glideTime = dir * 2 // 0 .. 1
-      }
+    server ! message.ControlBusSet(FillValue(ciBal, vBal))
+    if (config.display) Swing.onEDT {
+      // let's appropriate that rotary dial, LOL
+      panel.glideTime = balBase * 2 // 0 .. 1
     }
+
+    val tt    = sensorTrigThresh
+    val stamp = System.currentTimeMillis()
+    if (a0 > tt) trigTimes(0) = stamp
+    if (a1 > tt) trigTimes(1) = stamp
+    if (a2 > tt) trigTimes(2) = stamp
+    if (a3 > tt) trigTimes(3) = stamp
+    if (b0 > tt) trigTimes(4) = stamp
+    if (b1 > tt) trigTimes(5) = stamp
+    if (b2 > tt) trigTimes(6) = stamp
+    if (b3 > tt) trigTimes(7) = stamp
   }
 
   def spreadVecLin(in: Double, lo: Double, hi: Double): Vec[Double] = {
@@ -160,38 +205,38 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
 
   private[this] val refTestToken = Ref(-1)
 
-  def toggleTestRun()(implicit tx: S#Tx): Unit = {
+  def toggleAutoRun()(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
     val token = refTestToken.swap(-1)
     scheduler.cancel(token)
 
     if (token == -1) {
-      println("TEST RUN ON")
-      testRunNext()
+      println("AUTO RUN ON")
+      autoRunNext()
     } else {
-      println("TEST RUN OFF")
+      println("AUTO RUN OFF")
     }
   }
 
-  private def testRunNext()(implicit tx: S#Tx): Unit = {
+  private def autoRunNext()(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
     val dur         = Util.rangeRand(10.0, 60.0)
     val durFrames   = (TimeRef.SampleRate * dur).toLong
     val time0       = scheduler.time
-    println(s"TEST RUN DUR $dur")
+    log(s"next algorithm run in ${dur.toInt} sec.")
     val token       = scheduler.schedule(time0 + durFrames) { implicit tx =>
-      testRunAct()
+      autoRunAct()
     }
     refTestToken()  = token
   }
 
-  private def testRunAct()(implicit tx: S#Tx): Unit = {
+  private def autoRunAct()(implicit tx: S#Tx): Unit = {
     if (Util.coin(0.2)) {
       changeNegatum()
     } else {
       toggleFilter()
     }
-    testRunNext()
+    autoRunNext()
   }
 
   def insertFilter()(implicit tx: S#Tx): Boolean = {
@@ -326,10 +371,22 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
     implicit val itx: I#Tx  = bridge(tx)
 
     import numbers.Implicits._
-    val pAdd    = Util.rangeRand(-1, 1) // util.Random.nextInt(3) - 1
-    val pIdx    = refGraphPos.transformAndGet(i => (i + pAdd).wrap(0, numProcs - 1))
-    val grProc  = grProcH()
-    val pGen0SOpt  = grProc.at(pIdx).flatMap { e =>
+    val pIdx = {
+      val stamp   = System.currentTimeMillis()
+      val numTrig = trigTimes.count(tt => stamp - tt < maxJumpTrigSpan)
+      if (numTrig >= minJumpNumTrig && stamp - timeJumpGraph() > minJumpTrigPause) {
+        val i = Util.rand(numProcs)
+        log(s"graph jump to $i")
+        refGraphPos   () = i
+        timeJumpGraph () = stamp
+        i
+      } else {
+        val pAdd = Util.rangeRand(-1, 1)
+        refGraphPos.transformAndGet(i => (i + pAdd).wrap(0, numProcs - 1))
+      }
+    }
+    val grProc = grProcH()
+    val pGen0SOpt = grProc.at(pIdx).flatMap { e =>
       e.value match {
         case p: Proc[S] => Some(p)
         case _          => None
@@ -517,10 +574,6 @@ class InfMain[S <: Sys[S], I <: Sys[I]](
       println("! createBasicStructure failed")
     }
   }
-
-  var showLog: Boolean = config.log
-
-  def fullVersion: String = "v0.1.0-SNAPSHOT"
 
   private def stepI[A](f: I#Tx => A): A =
     cursor.step { implicit tx =>

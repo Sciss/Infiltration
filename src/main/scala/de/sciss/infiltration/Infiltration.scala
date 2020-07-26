@@ -71,9 +71,22 @@ object Infiltration {
         eth.map(_ => ()) }
     }
 
+  private def buildInfString(key: String): String = try {
+    val clazz = Class.forName("de.sciss.infiltration.BuildInfo")
+    val m     = clazz.getMethod(key)
+    m.invoke(null).toString
+  } catch {
+    case NonFatal(_) => "?"
+  }
+
+  final def name        : String = "in|filtration"
+  final def version     : String = buildInfString("version")
+  final def builtAt     : String = buildInfString("builtAtString")
+  final def fullVersion : String = s"v$version, built $builtAt"
+
   def main(args: Array[String]): Unit = {
     object p extends ScallopConf(args) {
-      printedName = "in|filtration"
+      printedName = s"${Infiltration.name} ${Infiltration.fullVersion}"
 
       private val default = Config()
 
@@ -123,8 +136,12 @@ object Infiltration {
       val sensorNoiseFloor: Opt[Float] = opt("sensor-noise-floor", default = Some(default.sensorNoiseFloor),
         descr = "Noise floor level below which sensors are interpreted as off"
       )
+      val sensorTrigThresh: Opt[Float] = opt("sensor-trig-thresh", default = Some(default.sensorTrigThresh),
+        descr = "Trigger threshold for sensors"
+      )
 
       verify()
+
       val config: Config = Config(
         baseDir             = baseDir(),
         dumpOsc             = dumpOsc(),
@@ -138,11 +155,14 @@ object Infiltration {
         display             = display(),
         highPass            = highPass(),
         sensorNoiseFloor    = sensorNoiseFloor(),
+        sensorTrigThresh    = sensorTrigThresh(),
       )
     }
 
-    val cfg = p.config
-    val localSocketAddress = Network.initConfig(cfg)
+    val cfg0  = p.config
+    println(p.printedName)
+    val localSocketAddress = Network.initConfig(cfg0)
+    val cfg   = if (cfg0.dot >= 0) cfg0 else cfg0.copy(dot = Network.resolveDot(cfg0, localSocketAddress))
 
 //    if (cfg.log) main.showLog = true
 
@@ -162,7 +182,7 @@ object Infiltration {
 
 //    Wolkenpumpe.init()
     Mellite .initTypes()
-    run(localSocketAddress, p.config)
+    run(localSocketAddress, cfg)
   }
 
   def any2stringadd(in: Any): Any = ()
@@ -174,8 +194,7 @@ object Infiltration {
     val dbCfg         = BerkeleyDB.Config()
     dbCfg.readOnly    = true
     dbCfg.allowCreate = false
-    val dot           = Network.resolveDot(config, localSocketAddress)
-    val trunkId       = Network.mapDotToTrunk(dot)
+    val trunkId       = Network.mapDotToTrunk(config.dot)
     val wsDir         = config.baseDir / "workspaces" / s"Trunk${trunkId}graph.mllt"
     val dbF           = BerkeleyDB        .factory(wsDir, dbCfg)
     val ws            = Workspace.Durable .read   (wsDir, dbF)
@@ -190,7 +209,8 @@ object Infiltration {
         nCfg.mainChannels   = Some(0 until 4)
         nCfg.soloChannels   = None
         // we need one here so that the right number of input channels is chosen
-        nCfg.lineInputs     = Vector(NamedBusConfig("ignore", 0 until 2))
+//        nCfg.lineInputs     = Vector(NamedBusConfig("ignore", 0 until 2))
+        nCfg.lineInputs     = Vector(NamedBusConfig("ignore", 0 until 1), NamedBusConfig("ignore", 1 until 2))
         nCfg.lineOutputs    = Vector(NamedBusConfig("network" /* "ignore"*/, 4 until 6))
         nCfg.micInputs      = Vector.empty
         nCfg.lineOutputsSplay = false
@@ -452,7 +472,7 @@ object Infiltration {
     w.run(nuagesH)
     val view  = w.view
 
-    val infR = Ref(Option.empty[InfMain[S, I]])
+    val infR = Ref(Option.empty[Algorithm[S, I]])
 
     val panel = view.panel
     Swing.onEDT {
@@ -485,14 +505,14 @@ object Infiltration {
         infR().foreach(_.changeNegatum())
       }
 
-      buttonTx("Flt") { implicit tx =>
-        implicit val tx0: InTxn = tx.peer
-        infR().foreach(_.toggleFilter())
-      }
+//      buttonTx("Flt") { implicit tx =>
+//        implicit val tx0: InTxn = tx.peer
+//        infR().foreach(_.toggleFilter())
+//      }
 
       buttonTx("Run") { implicit tx =>
         implicit val tx0: InTxn = tx.peer
-        infR().foreach(_.toggleTestRun())
+        infR().foreach(_.toggleAutoRun())
       }
     }
 
@@ -534,7 +554,7 @@ object Infiltration {
               implicit val tx0: InTxn = tx.peer
               implicit val itx: I#Tx  = tx.inMemory
               val surface = nuagesH().surface.peer.asInstanceOf[Folder[I]]
-              val inf = new InfMain[S, I](
+              val inf = new Algorithm[S, I](
                 view,
                 server    = server,
                 localSocketAddress = localSocketAddress,

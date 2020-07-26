@@ -18,7 +18,7 @@ import java.net.{InetSocketAddress, SocketAddress}
 import de.sciss.osc
 import de.sciss.osc.UDP
 
-import scala.concurrent.stm.{InTxn, Ref, Txn}
+import scala.concurrent.stm.{InTxn, Txn}
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -26,19 +26,17 @@ object OscClient {
   def apply(scene: SoundScene, config: Config, localSocketAddress: InetSocketAddress): OscClient = {
     val c                 = UDP.Config()
     c.codec               = Network.oscCodec
-    val dot               = Network.resolveDot(config, localSocketAddress)
     c.localSocketAddress  = localSocketAddress
 //    c.bufferSize          = 32768   // only higher for sending SynthDefs
-    println(s"OscClient local socket $localSocketAddress - dot $dot")
+    println(s"OscClient local socket $localSocketAddress - dot ${config.dot}")
     val tx                = UDP.Transmitter(c)
     val rx                = UDP.Receiver(tx.channel, c)
-    new OscClient(config, dot, tx, rx, scene = scene)
+    new OscClient(config, tx, rx, scene = scene)
   }
 
   //  private val DummyDoneFun: File => Unit = _ => ()
 }
 class OscClient(val config      : Config,
-                val dot         : Int,
                 val transmitter : UDP.Transmitter.Undirected,
                 val receiver    : UDP.Receiver.Undirected,
                 val scene       : SoundScene,
@@ -123,7 +121,7 @@ class OscClient(val config      : Config,
           Util.reboot()
 
       case Network.OscQueryVersion =>
-        transmitter.send(Network.OscReplyVersion(scene /*main*/.fullVersion), sender)
+        transmitter.send(Network.OscReplyVersion(Infiltration.fullVersion), sender)
 
       case osc.Message("/error"        , _ @ _*) =>
       case osc.Message("/inject-abort" , _ @ _*) =>
@@ -165,10 +163,10 @@ class OscClient(val config      : Config,
     this
   }
 
-  private[this] val txnCount = Ref(0)
-
-  final def mkTxnId()(implicit tx: InTxn): Long = {
-    val i = txnCount.getAndTransform(_ + 1)
-    (i.toLong * 1000) + dot
-  }
+//  private[this] val txnCount = Ref(0)
+//
+//  final def mkTxnId()(implicit tx: InTxn): Long = {
+//    val i = txnCount.getAndTransform(_ + 1)
+//    (i.toLong * 1000) + dot
+//  }
 }

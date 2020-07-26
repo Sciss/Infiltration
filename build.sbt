@@ -11,6 +11,15 @@ lazy val commonSettings = Seq(
   test in assembly := {},
 )
 
+lazy val buildInfoSettings = Seq(
+  // ---- build info ----
+  buildInfoKeys := Seq(name, organization, version, scalaVersion, description,
+    BuildInfoKey.map(homepage) { case (k, opt)           => k -> opt.get },
+    BuildInfoKey.map(licenses) { case (_, Seq((lic, _))) => "license" -> lic }
+  ),
+  buildInfoOptions += BuildInfoOption.BuildTime
+)
+
 lazy val deps = new {
   val fscape          = "2.36.1"
   val lucre           = "3.17.6-SNAPSHOT"
@@ -22,7 +31,9 @@ lazy val deps = new {
 }
 
 lazy val root = project.in(file("."))
+  .enablePlugins(BuildInfoPlugin)
   .settings(commonSettings)
+  .settings(buildInfoSettings)
   .settings(
     libraryDependencies ++= Seq(
       "de.sciss" %% "fscape-macros" % deps.fscape,
@@ -46,5 +57,6 @@ lazy val root = project.in(file("."))
       case x =>
         val oldStrategy = (assemblyMergeStrategy in assembly).value
         oldStrategy(x)
-    }
+    },
+    buildInfoPackage := "de.sciss.infiltration",
   )

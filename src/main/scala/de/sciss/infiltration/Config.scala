@@ -26,10 +26,11 @@ case class Config(
                    qjLaunch             : Boolean       = false,
                    ownSocket            : Option[InetSocketAddress] = None,
                    dot                  : Int           = -1,
-                   log                  : Boolean       = false,
+                   log                  : Boolean       = true, // false,
                    display              : Boolean       = true,
                    highPass             : Int           = 0,
                    sensorNoiseFloor     : Float         = 1.0e-3f,
+                   sensorTrigThresh     : Float         = 0.2f,
                  ) {
 
 }
