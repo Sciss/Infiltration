@@ -1,6 +1,6 @@
 lazy val commonSettings = Seq(
   name               := "Infiltration",
-  version            := "0.1.0",
+  version            := "0.1.1",
   organization       := "de.sciss",
   scalaVersion       := "2.13.3",
   licenses           := Seq("AGPL v3+" -> url("http://www.gnu.org/licenses/agpl-3.0.txt")),

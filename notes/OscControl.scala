@@ -33,13 +33,45 @@ t4 ! osc.Message("/stop")
 
 val tAll = Seq(t1, t2, t3, t4)
 
-def sendAll(p: osc.Packet): Unit = tAll.foreach(_ ! p)
+// def sendAll(p: osc.Packet): Unit = tAll.foreach(_ ! p)
 
 sendAll(osc.Message("/stop"))
 sendAll(osc.Message("/start"))
 
+sendAll(osc.Message("/set-volume", 1.0f))
+sendAll(osc.Message("/set-volume", 0f))
 
 // 1: 43, 2: 42, 3: 40, 4: 44
 
+
+sendAll(osc.Message("/shutdown"))
+
+val tAll = Seq(36, 37, 40, 42, 43, 44).map { dot =>
+  val t = osc.UDP.Transmitter(s"192.168.0.$dot" -> 57120)
+  t.connect()
+  t
+}
+
+def sendAll(p: osc.Packet): Unit = tAll.foreach(_ ! p)
+
+sendAll(osc.Message("/set-volume", 0.0f))
+sendAll(osc.Message("/set-volume", 0.25f))
+sendAll(osc.Message("/set-volume", 0.5f))
+
+sendAll(osc.Message("/stop"))
+
+tAll(0) ! osc.Message("/start")
+tAll(1) ! osc.Message("/start")
+tAll(2) ! osc.Message("/start")
+tAll(3) ! osc.Message("/start")
+tAll(4) ! osc.Message("/start")
+tAll(5) ! osc.Message("/start")
+
+tAll(0) ! osc.Message("/stop")
+tAll(1) ! osc.Message("/stop")
+tAll(2) ! osc.Message("/stop")
+tAll(3) ! osc.Message("/stop")
+tAll(4) ! osc.Message("/stop")
+tAll(5) ! osc.Message("/stop")
 
 sendAll(osc.Message("/shutdown"))

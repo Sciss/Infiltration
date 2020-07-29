@@ -34,6 +34,7 @@ case class Config(
                    sensorTrigThreshDn   : Float         = 0.15f,
                    flipTrigDurSec       : Int           = 5 * 60,
                    forgetDurSec         : Int           = 2 * 60,
+                   maxMainGain          : Double        = 2.0,
                  ) {
 
 }

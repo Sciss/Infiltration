@@ -30,7 +30,7 @@ import de.sciss.synth.{GE, proc, Server => SServer}
 import org.rogach.scallop.{ArgType, ScallopConf, ValueConverter, ScallopOption => Opt}
 
 import scala.concurrent.stm.{InTxn, Ref}
-import scala.swing.{Button, Swing}
+import scala.swing.{Button, Font, Label, Swing}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
@@ -148,6 +148,9 @@ object Infiltration {
       val forgetDurSec: Opt[Int] = opt("forget-dur", default = Some(default.forgetDurSec),
         descr = s"Duration of forgetting step in seconds (default: ${default.forgetDurSec})"
       )
+      val maxMainGain: Opt[Double] = opt("max-main-gain", default = Some(default.maxMainGain),
+        descr = s"Maximum main gain, linear (default: ${default.maxMainGain})"
+      )
 
       verify()
 
@@ -168,6 +171,7 @@ object Infiltration {
         sensorTrigThreshDn  = sensorTrigThreshDn(),
         flipTrigDurSec      = flipTrigDurSec(),
         forgetDurSec        = forgetDurSec(),
+        maxMainGain         = maxMainGain(),
       )
     }
 
@@ -210,6 +214,7 @@ object Infiltration {
     val wsDir         = config.baseDir / "workspaces" / s"Trunk${trunkId}graph.mllt"
     val dbF           = BerkeleyDB        .factory(wsDir, dbCfg)
     val ws            = Workspace.Durable .read   (wsDir, dbF)
+    val rowIdx        = (Network.dotSeqCtl.indexOf(config.dot) + 1) * 2
 
     implicit val system: S = ws.system // InMemory()
 
@@ -265,90 +270,6 @@ object Infiltration {
             in
           else
             Vector.fill(genNumChannels)(in)
-
-//        generator("negatum-3f704ff8") {
-//          import de.sciss.synth.ugen._
-//
-//          //          shortcut = "N"
-//          val freq_0  = pAudio("p1", ParamSpec( 13.122, 1.73999104e8, ExpWarp), default(1.73999104e8))
-//          val freq_1  = pAudio("p2", ParamSpec(-13.122, 22050.0     , LinWarp), default( 0.14800115))
-//          val in_6    = pAudio("p3", ParamSpec( -0.81 ,     2.05    , LinWarp), default(-0.29881296))
-//          val param   = pAudio("p4", ParamSpec( -0.32 , 22050.0     , LinWarp), default( 0.0))
-//
-//          RandSeed.ir(trig = 1, seed = 56789.0)
-//          val in_0            = Impulse.ar(freq = 60.0, phase = 1.0)
-//          val bPZ2            = BPZ2.ar(in_0)
-//          val lFDNoise1_0     = LFDNoise1.ar(freq_0)
-//          val in_1            = lFDNoise1_0 min param
-//          val in_2            = LeakDC.ar(in_1, coeff = 0.995)
-//          val in_3            = Delay1.ar(in_2)
-//          val lag             = Lag.ar(in_3, time = 1.0)
-//          val in_4            = param min in_3
-//          val min_0           = in_4 min lag
-//          val min_1           = in_1 min min_0
-//          val in_5            = LeakDC.ar(in_4, coeff = 0.995)
-//          val delay1          = Delay1.ar(in_5)
-//          val min_2           = bPZ2 min param
-//          val impulse         = Impulse.ar(freq = 0.1, phase = 1.0)
-//          val lFDNoise1_1     = LFDNoise1.ar(freq_1)
-//          val dC              = DC.ar(in_6)
-//          val in_7            = Mix(Seq[GE](min_1, delay1, min_2, impulse, lFDNoise1_1, dC))
-//          val checkBadValues  = CheckBadValues.ar(in_7, id = 0.0, post = 0.0)
-//          val gate_0          = checkBadValues sig_== 0.0
-//          val gate_1          = Gate.ar(in_7, gate = gate_0)
-//          val in_8            = gate_1 clip2 1.0
-//          val leakDC          = LeakDC.ar(in_8, coeff = 0.995)
-//          val times           = leakDC * 0.47
-//          times
-//        }
-
-//        generator("negatum-8bbebbf4") {
-//          import de.sciss.synth.ugen._
-//
-//          shortcut = "N"
-//          val in_0    = pAudio("p1", ParamSpec( 10.0, 60.0, ExpWarp), default(60.0))
-//          val param_2 = pAudio("p2", ParamSpec( -22050.0, 22050.0, LinWarp), default(2.0))
-//          val param_0 = pAudio("p3", ParamSpec( 1.0, 22050.0, ExpWarp), default(2885.5125))
-//          val param_1 = pAudio("p4", ParamSpec( -0.127, 22050.0, LinWarp), default(0.008551382))
-//          val in_4    = pAudio("p5", ParamSpec( -0.05, 2.05, LinWarp), default(0.0))
-//
-//          RandSeed.ir(trig = 1, seed = 56789.0)
-//          val freq            = Clip.ar(in_0, lo = 10.0, hi = 60.0)
-//          val numHarm         = param_0 max 1.0
-//          val blip            = Blip.ar(freq = freq, numHarm = numHarm)
-//          val in_1            = param_1 min blip
-//          val min_0           = in_1 min 8.9271076E-4
-//          val in_2            = LeakDC.ar(in_1, coeff = 0.995)
-//          val in_3            = BRZ2.ar(in_2)
-//          val min_1           = in_4 min in_4
-//          val maxDelayTime    = Clip.ar(in_4, lo = 0.01, hi = 20.0)
-//          val max             = min_1 max 0.0
-//          val delayTime       = max min maxDelayTime
-//          val in_5            = DelayC.ar(in_3, maxDelayTime = maxDelayTime, delayTime = delayTime)
-//          val leakDC_0        = LeakDC.ar(in_5, coeff = 0.8)
-//          val in_6            = leakDC_0 roundTo in_5
-//          val neq             = in_4 sig_!= in_6
-//          val in_7            = in_4 min in_6
-//          val in_8            = LeakDC.ar(in_7, coeff = 0.995)
-//          val hPZ1_0          = HPZ1.ar(in_8)
-//          val min_2           = in_7 min min_0
-//          val dC              = DC.ar(0.001)
-//          val slew            = Slew.ar(in_7, up = 0.001, down = 0.001)
-//          val times_0         = in_7 * param_2
-//          val in_9            = leakDC_0.distort
-//          val hPZ1_1          = HPZ1.ar(in_9)
-//          val phase           = Clip.ar(in_6, lo = 0.0, hi = 1.0)
-//          val impulse         = Impulse.ar(freq = 0.1, phase = phase)
-//          val min_3           = (-0.12408662: GE) min blip
-//          val in_10           = Mix(Seq[GE](neq, hPZ1_0, min_2, dC, slew, times_0, hPZ1_1, impulse, min_3))
-//          val checkBadValues  = CheckBadValues.ar(in_10, id = 0.0, post = 0.0)
-//          val gate_0          = checkBadValues sig_== 0.0
-//          val gate_1          = Gate.ar(in_10, gate = gate_0)
-//          val in_11           = gate_1 clip2 1.0
-//          val leakDC_1        = LeakDC.ar(in_11, coeff = 0.995)
-//          val times_1         = leakDC_1 * 0.47
-//          times_1
-//        }
 
         filterF("adapt") { in =>
           import de.sciss.synth.ugen._
@@ -447,7 +368,7 @@ object Infiltration {
           //          r1.ampDb.poll(1, "r1")
           //          r2.ampDb.poll(1, "r2")
           //          r3.ampDb.poll(1, "r3")
-          val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 1.25 /* * 10*/).min(1.0 /*8.0*/ /*4.0*/)
+          val gainF = ((r1 + 3 * r2 + 2 * r3).reciprocal * 1.25 /* * 10*/).min(config.maxMainGain /*1.0*/ /*8.0*/ /*4.0*/)
           val gain = LagUD.kr(gainF, timeUp = 2.0, timeDown = 0.1)
           //val gain = Lag.kr(gainF, 1.0).min(4.0)
           //          gain.ampDb.poll(1, "gain")
@@ -524,10 +445,14 @@ object Infiltration {
 //        infR().foreach(_.toggleFilter())
 //      }
 
-      buttonTx("Run") { implicit tx =>
-        implicit val tx0: InTxn = tx.peer
-        infR().foreach(_.toggleAutoRun())
-      }
+//      buttonTx("Run") { implicit tx =>
+//        implicit val tx0: InTxn = tx.peer
+//        infR().foreach(_.toggleAutoRun())
+//      }
+
+      view.addSouthComponent(new Label(rowIdx.toString) {
+        font = Font(Font.SansSerif, Font.Plain, 36)
+      })
     }
 
     system.step { implicit tx =>

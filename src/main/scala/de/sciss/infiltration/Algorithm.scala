@@ -21,14 +21,15 @@ import de.sciss.kollflitz.Vec
 import de.sciss.lucre.expr.{DoubleVector, IntObj}
 import de.sciss.lucre.stm
 import de.sciss.lucre.stm.{Copy, Folder}
-import de.sciss.lucre.synth.{Server, Sys}
+import de.sciss.lucre.synth.{AudioBus, Bus, Server, Synth, Sys}
 import de.sciss.nuages.NuagesView
 import de.sciss.numbers
 import de.sciss.kollflitz
+import de.sciss.lucre.swing.LucreSwing.defer
 import de.sciss.synth.proc.Implicits._
 import de.sciss.synth.proc.Proc.{mainIn, mainOut}
 import de.sciss.synth.proc.{EnvSegment, Grapheme, Output, Proc, Scheduler, SoundProcesses, TimeRef}
-import de.sciss.synth.{Curve, FillValue, message}
+import de.sciss.synth.{Curve, FillValue, SynthGraph, addToTail, message}
 
 import scala.annotation.elidable
 import scala.concurrent.stm.{InTxn, Ref}
@@ -70,6 +71,9 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
   private[this] var hndOut    : ProcH = _
   private[this] var hndAdapt1 : ProcH = _
 
+  private[this] val refAdapt1Patch = Ref(-1)  // zero-based param num
+  private[this] val refGenNumParam = Ref(0)
+
   private[this] implicit val random: Random = new Random()
 
   private[this] val refGraphPos = Ref((math.random() * numProcs).toInt)
@@ -94,11 +98,101 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
 //    deferBi { (tx, itx) => runProgram() }
     autoRunNext()
 
-    tx.afterCommit {
-      server.peer.dumpTree(controls = true)
+    mkPeakMeter(Bus.soundOut(server, numChannels = 4)) { v =>
+      SoundProcesses.step[S]("peak") { implicit tx =>
+        peakUpdate(v)
+      }
     }
 
+//    tx.afterCommit {
+//      server.peer.dumpTree(controls = true)
+//    }
+
     this
+  }
+
+  private[this] val lowVolumeCount = Ref(0)
+
+  private def peakUpdate(v: Double)(implicit tx: S#Tx): Unit = {
+    implicit val tx0: InTxn = tx.peer
+    if (v > 0.05) {
+      lowVolumeCount() = 0
+    } else {
+      val c = lowVolumeCount.transformAndGet(_ + 1)
+      val thresh1 = 6
+      val thresh2 = thresh1 + 4
+      if (c >= thresh1) {  // start trying modifications
+        log(s"too silent ($c)")
+        val numParam = refGenNumParam()
+        if (c >= thresh2 || numParam == 0) { // tried four different things without effect
+          changeNegatum()
+        } else {
+          import numbers.Implicits._
+          val parIdx = c.wrap(0, numParam - 1)
+          randomizePar(parIdx)
+        }
+      }
+    }
+  }
+
+  private def randomizePar(parIdx: Int)(implicit tx: S#Tx): Unit = {
+    implicit val tx0: InTxn = tx.peer
+    implicit val itx: I#Tx  = bridge(tx)
+
+    log(s"randomizePar($parIdx)")
+
+    def perform(): Unit = {
+      val v0      = Util.rangeRand(0.0, 1.0)
+      val parVec  = spreadVecLin(v0, 0.0, 1.0)
+      val parObj  = DoubleVector.newVar[I](parVec)
+      val pGen    = refGen().apply()
+      val aGen    = pGen.attr
+      aGen.put(parKey(parIdx), parObj)
+    }
+
+    if (refAdapt1Patch() == parIdx) {
+      val numParam = refGenNumParam()
+      if (numParam <= 1) return // could randomize the adaptation...
+      val idx0      = Util.rand(numParam - 1)
+      val adaptIdx  = if (idx0 < parIdx) idx0 else idx0 + 1
+      perform()
+      patchAdaptToGen(adaptIdx)
+
+    } else {
+      perform()
+    }
+  }
+
+  private def mkPeakMeter(bus: AudioBus)(fun: Double => Unit)(implicit tx: S#Tx): Synth = {
+    val numCh  = bus.numChannels
+    val graph  = {
+      val res = SynthGraph {
+        import de.sciss.synth._
+        import Ops._
+        import ugen._
+        val meterTr = Impulse.kr(1.0/4) - Impulse.kr(0)
+        val sig     = In.ar("in".kr, numCh)
+        val peak    = Peak.kr(sig, meterTr) // .outputs
+        val peakM   = Reduce.max(peak)
+        SendTrig.kr(meterTr, peakM)
+      }
+//      peakMeterGraphMap += numCh -> res
+      res
+    }
+//    val server  = node.server
+    val syn     = Synth.play(graph, Some("peak"))(server.defaultGroup, addAction = addToTail,
+      dependencies = /*node ::*/ Nil)
+    syn.read(bus -> "in")
+    val NodeId = syn.peer.id
+    val trigResp = message.Responder.add(server.peer) {
+      case message.Trigger(NodeId, 0, peak: Float) => defer(fun(peak))
+    }
+    // Responder.add is non-transactional. Thus, if the transaction fails, we need to remove it.
+    scala.concurrent.stm.Txn.afterRollback { _ =>
+      trigResp.remove()
+    } (tx.peer)
+    syn.onEnd(trigResp.remove())
+    syn
   }
 
   private[this] val sensorNoiseFloor    = config.sensorNoiseFloor
@@ -530,6 +624,18 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     }
   }
 
+  private def parKey(parIdx: Int): String = s"p${parIdx + 1}"
+
+  private def patchAdaptToGen(parIdx: Int)(implicit tx: S#Tx): Unit = {
+    implicit val tx0: InTxn = tx.peer
+    implicit val itx: I#Tx  = bridge(tx)
+
+    val oAdapt1 = hndAdapt1().outputs.add(mainOut)
+    val pGen    = refGen().apply()
+    val aGen    = pGen.attr
+    aGen.put(parKey(parIdx), oAdapt1)
+  }
+
   def changeNegatum()(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
     implicit val itx: I#Tx  = bridge(tx)
@@ -566,7 +672,6 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       val pGenOld   = refGen.swap(itx.newHandle(pGenNew)).apply()
       val pPred     = refFilter().getOrElse(hndOut).apply()
       val oGenNew   = pGenNew.outputs.add(mainOut)
-      val oAdapt1   = hndAdapt1().outputs.add(mainOut)
       val aGenNew   = pGenNew.attr
       val numParam  =
         if      (aGenNew.contains("p5")) 5
@@ -576,14 +681,19 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
         else if (aGenNew.contains("p1")) 1
         else 0  // huh...
 
-      if (numParam > 0) {
+      refGenNumParam() = numParam
+
+      val patchIdx = if (numParam > 0) {
         val paramWSum = (numParam * (numParam + 1)) / 2
         val parWSeq   = 0 until numParam
         val parWFun   = (i: Int) => (numParam - i).toDouble / paramWSum
-        val parIdx = Util.weightedChoose(parWSeq)(parWFun)
+        val parIdx    = Util.weightedChoose(parWSeq)(parWFun)
+        patchAdaptToGen(parIdx)
 //        println(s"parIdx = $parIdx; sum ${parWSeq.map(parWFun).sum}")
-        aGenNew.put(s"p${parIdx + 1}", oAdapt1)
-      }
+        parIdx
+      } else -1
+
+      refAdapt1Patch() = patchIdx
 
       surface.remove  (pGenOld)
       surface.addLast (pGenNew)
