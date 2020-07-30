@@ -28,6 +28,7 @@ object Main {
     "remove-simple"     -> RemoveSimpleProcs.main,
     "make-chains"       -> MakeChains       .main,
     "convert-grapheme"  -> ConvertGrapheme  .main,
+    "sound-check"       -> SoundCheck       .main,
   )
 
   def main(args: Array[String]): Unit = {

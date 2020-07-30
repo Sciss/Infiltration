@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Infiltration
+Type=Application
+GenericName=Sound Installation
+Exec=lxterminal -e "/home/pi/Documents/projects/Infiltration/run.sh"
+

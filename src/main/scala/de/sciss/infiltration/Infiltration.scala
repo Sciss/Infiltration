@@ -30,7 +30,7 @@ import de.sciss.synth.{GE, proc, Server => SServer}
 import org.rogach.scallop.{ArgType, ScallopConf, ValueConverter, ScallopOption => Opt}
 
 import scala.concurrent.stm.{InTxn, Ref}
-import scala.swing.{Button, Font, Label, Swing}
+import scala.swing.{Button, Font, Insets, Label, Swing}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
@@ -203,6 +203,8 @@ object Infiltration {
 
   def any2stringadd(in: Any): Any = ()
 
+  def deviceName: String = "Infiltration"
+
   def run(localSocketAddress: InetSocketAddress, config: Config): Unit = {
     type S = Durable
     type I = S#I
@@ -237,7 +239,7 @@ object Infiltration {
         nCfg.showFrame      = config.display
         nCfg.meters         = config.display
         sCfg.highPass       = config.highPass
-        aCfg.deviceName     = Some("Infiltration")
+        aCfg.deviceName     = Some(deviceName)
       }
 
       override protected def registerProcesses(nuages: Nuages[I], nCfg: Nuages.Config, sCfg: ScissProcs.Config)
@@ -413,17 +415,14 @@ object Infiltration {
     Swing.onEDT {
       panel.display.setHighQuality(false)
 
-      def button(name: String)(fun: => Unit): Unit =
-        view.addSouthComponent(Button(name) {
-          fun
-        })
+      def button(name: String)(fun: => Unit): Unit = {
+        val b = Button(name)(fun)
+        b.margin = new Insets(2, 2, 2, 2)
+        view.addSouthComponent(b)
+      }
 
       def buttonTx(name: String)(fun: S#Tx => Unit): Unit =
-        view.addSouthComponent(Button(name) {
-          system.step { implicit tx =>
-            fun(tx)
-          }
-        })
+        button(name)(system.step(fun(_)))
 
       button("Sta") {
         val sOpt = system.step { implicit tx =>
@@ -445,10 +444,10 @@ object Infiltration {
 //        infR().foreach(_.toggleFilter())
 //      }
 
-//      buttonTx("Run") { implicit tx =>
-//        implicit val tx0: InTxn = tx.peer
-//        infR().foreach(_.toggleAutoRun())
-//      }
+      buttonTx("Run") { implicit tx =>
+        implicit val tx0: InTxn = tx.peer
+        infR().foreach(_.toggleAutoRun())
+      }
 
       view.addSouthComponent(new Label(rowIdx.toString) {
         font = Font(Font.SansSerif, Font.Plain, 36)

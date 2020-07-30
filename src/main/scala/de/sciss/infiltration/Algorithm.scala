@@ -98,9 +98,9 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
 //    deferBi { (tx, itx) => runProgram() }
     autoRunNext()
 
-    mkPeakMeter(Bus.soundOut(server, numChannels = 4)) { v =>
+    mkAnalysisMeter(Bus.soundOut(server, numChannels = 4)) { (peak, badCnt) =>
       SoundProcesses.step[S]("peak") { implicit tx =>
-        peakUpdate(v)
+        analysisUpdate(peak, badCnt)
       }
     }
 
@@ -112,17 +112,15 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
   }
 
   private[this] val lowVolumeCount = Ref(0)
+  private[this] val badPitchCount  = Ref(0)
 
-  private def peakUpdate(v: Double)(implicit tx: S#Tx): Unit = {
+  private def analysisUpdate(peak: Double, badCnt: Int)(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
-    if (v > 0.05) {
-      lowVolumeCount() = 0
-    } else {
-      val c = lowVolumeCount.transformAndGet(_ + 1)
-      val thresh1 = 6
-      val thresh2 = thresh1 + 4
-      if (c >= thresh1) {  // start trying modifications
-        log(s"too silent ($c)")
+
+    def testThresh(c: Int, thresh1: Int, name: String): Unit = {
+      if (c >= thresh1) { // start trying modifications
+        log(s"too $name ($c)")
+        val thresh2 = thresh1 + 4
         val numParam = refGenNumParam()
         if (c >= thresh2 || numParam == 0) { // tried four different things without effect
           changeNegatum()
@@ -132,6 +130,21 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
           randomizePar(parIdx)
         }
       }
+    }
+
+    if (peak > 0.05) {
+      lowVolumeCount() = 0
+      if (badCnt < 2200) {
+        badPitchCount() = 0
+      } else {
+        val c = badPitchCount.transformAndGet(_ + 1)
+        testThresh(c, 3, "much static pitch")
+      }
+
+    } else {
+      badPitchCount() = 0
+      val c = lowVolumeCount.transformAndGet(_ + 1)
+      testThresh(c, 6, "silent")
     }
   }
 
@@ -163,7 +176,7 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     }
   }
 
-  private def mkPeakMeter(bus: AudioBus)(fun: Double => Unit)(implicit tx: S#Tx): Synth = {
+  private def mkAnalysisMeter(bus: AudioBus)(fun: (Double, Int) => Unit)(implicit tx: S#Tx): Synth = {
     val numCh  = bus.numChannels
     val graph  = {
       val res = SynthGraph {
@@ -174,18 +187,32 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
         val sig     = In.ar("in".kr, numCh)
         val peak    = Peak.kr(sig, meterTr) // .outputs
         val peakM   = Reduce.max(peak)
-        SendTrig.kr(meterTr, peakM)
+
+        val zcT     = meterTr
+        val zc0     = A2K.kr(ZeroCrossing.ar(sig))
+        val zc      = Median.kr(zc0, 5 /* 13 */ /* 11 */ /* 7 */)
+        val zcMx    = RunningMax.kr(zc, zcT).max(1.0)
+        val zcMn    = RunningMin.kr(zc, zcT).max(1.0)
+        val zcRat   = zcMx / zcMn
+        val zcLoRat = 0.9
+        val zcHiRat = 1.0 / zcLoRat
+
+        val isBad   = (peak > 0.1) & (zcMn > 220) & (zcMx > 220) & ((zcRat > zcLoRat) & (zcRat < zcHiRat))
+        val badCnt0 = Integrator.kr(isBad, coeff = 1.0 - zcT)
+        val badCnt  = Reduce.max(badCnt0)
+
+        SendTrig.kr(meterTr, peakM, badCnt)
       }
 //      peakMeterGraphMap += numCh -> res
       res
     }
 //    val server  = node.server
-    val syn     = Synth.play(graph, Some("peak"))(server.defaultGroup, addAction = addToTail,
+    val syn     = Synth.play(graph, Some("analysis"))(server.defaultGroup, addAction = addToTail,
       dependencies = /*node ::*/ Nil)
     syn.read(bus -> "in")
     val NodeId = syn.peer.id
     val trigResp = message.Responder.add(server.peer) {
-      case message.Trigger(NodeId, 0, peak: Float) => defer(fun(peak))
+      case message.Trigger(NodeId, badCnt: Int, peak: Float) => defer(fun(peak, badCnt))
     }
     // Responder.add is non-transactional. Thus, if the transaction fails, we need to remove it.
     scala.concurrent.stm.Txn.afterRollback { _ =>
