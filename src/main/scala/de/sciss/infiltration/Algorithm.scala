@@ -74,6 +74,8 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
   private[this] val refAdapt1Patch = Ref(-1)  // zero-based param num
   private[this] val refGenNumParam = Ref(0)
 
+  private[this] val refGenPar = Array.fill(5)(Ref(Vec.empty[Double]))
+
   private[this] implicit val random: Random = new Random()
 
   private[this] val refGraphPos = Ref((math.random() * numProcs).toInt)
@@ -148,6 +150,24 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     }
   }
 
+  private def removeParVec(parIdx: Int)(implicit tx: S#Tx): Unit = {
+    implicit val tx0: InTxn = tx.peer
+    val r = refGenPar(parIdx)
+    r()   = Vec.empty
+  }
+
+  private def putParVec(parIdx: Int, parVec: Vec[Double])(implicit tx: S#Tx): Unit = {
+    implicit val tx0: InTxn = tx.peer
+    implicit val itx: I#Tx  = bridge(tx)
+
+    val r       = refGenPar(parIdx)
+    r()         = parVec
+    val pGen    = refGen().apply()
+    val aGen    = pGen.attr
+    val parObj  = DoubleVector.newVar[I](parVec)
+    aGen.put(parKey(parIdx), parObj)
+  }
+
   private def randomizePar(parIdx: Int)(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
     implicit val itx: I#Tx  = bridge(tx)
@@ -157,10 +177,7 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     def perform(): Unit = {
       val v0      = Util.rangeRand(0.0, 1.0)
       val parVec  = spreadVecLin(v0, 0.0, 1.0)
-      val parObj  = DoubleVector.newVar[I](parVec)
-      val pGen    = refGen().apply()
-      val aGen    = pGen.attr
-      aGen.put(parKey(parIdx), parObj)
+      putParVec(parIdx, parVec)
     }
 
     if (refAdapt1Patch() == parIdx) {
@@ -691,16 +708,16 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     }
 
     pGen0SOpt.foreach { pGen0S =>
-      val cpy       = Copy[S, I]
-      val pGenNew   = cpy(pGen0S)
+      val cpy         = Copy[S, I]
+      val pGenNew     = cpy(pGen0S)
       cpy.finish()
 
-      val surface   = surfaceH()
-      val pGenOld   = refGen.swap(itx.newHandle(pGenNew)).apply()
-      val pPred     = refFilter().getOrElse(hndOut).apply()
-      val oGenNew   = pGenNew.outputs.add(mainOut)
-      val aGenNew   = pGenNew.attr
-      val numParam  =
+      val surface     = surfaceH()
+      val pGenOldOpt  = Option(refGen.swap(itx.newHandle(pGenNew))).map(_.apply())
+      val pPred       = refFilter().getOrElse(hndOut).apply()
+      val oGenNew     = pGenNew.outputs.add(mainOut)
+      val aGenNew     = pGenNew.attr
+      val numParam    =
         if      (aGenNew.contains("p5")) 5
         else if (aGenNew.contains("p4")) 4
         else if (aGenNew.contains("p3")) 3
@@ -722,7 +739,7 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
 
       refAdapt1Patch() = patchIdx
 
-      surface.remove  (pGenOld)
+      pGenOldOpt.foreach(surface.remove) //  (pGenOld)
       surface.addLast (pGenNew)
       pPred.attr.put(mainIn, oGenNew)
     }
