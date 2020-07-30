@@ -27,7 +27,7 @@ lazy val deps = new {
   val negatum         = "0.15.5"
   val soundProcesses  = "3.35.8"
   val submin          = "0.3.4"
-  val wolkenpumpe     = "2.41.2"
+  val wolkenpumpe     = "2.41.3-SNAPSHOT"
 }
 
 lazy val root = project.in(file("."))

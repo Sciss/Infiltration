@@ -238,6 +238,7 @@ object Infiltration {
         nCfg.showTransport  = false
         nCfg.showFrame      = config.display
         nCfg.meters         = config.display
+        nCfg.displaySize    = (1024, 720)
         sCfg.highPass       = config.highPass
         aCfg.deviceName     = Some(deviceName)
       }
