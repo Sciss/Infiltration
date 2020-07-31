@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=OnOff
+Type=Application
+Exec=lxterminal -e "/home/pi/Documents/projects/Infiltration/run-on-off.sh"
+

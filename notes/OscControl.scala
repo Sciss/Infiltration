@@ -57,8 +57,10 @@ def sendAll(p: osc.Packet): Unit = tAll.foreach(_ ! p)
 sendAll(osc.Message("/set-volume", 0.0f))
 sendAll(osc.Message("/set-volume", 0.25f))
 sendAll(osc.Message("/set-volume", 0.5f))
+sendAll(osc.Message("/set-volume", 1f))
 
 sendAll(osc.Message("/stop"))
+sendAll(osc.Message("/start"))
 
 tAll(0) ! osc.Message("/start")
 tAll(1) ! osc.Message("/start")
@@ -75,3 +77,4 @@ tAll(4) ! osc.Message("/stop")
 tAll(5) ! osc.Message("/stop")
 
 sendAll(osc.Message("/shutdown"))
+sendAll(osc.Message("/reboot"))

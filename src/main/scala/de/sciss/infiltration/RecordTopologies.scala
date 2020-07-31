@@ -274,7 +274,6 @@ object RecordTopologies {
 
         collectorF("O-inf") { in =>
           import de.sciss.synth.ugen._
-          import de.sciss.synth.Ops.stringToControl
 //          val in0 = In.ar(0, 4)
           val inM = Mix.mono(in)
           CheckBadValues.ar(inM)

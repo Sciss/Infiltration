@@ -35,6 +35,10 @@ case class Config(
                    flipTrigDurSec       : Int           = 5 * 60,
                    forgetDurSec         : Int           = 2 * 60,
                    maxMainGain          : Double        = 2.0,
+                   displayWidth         : Int           = 1000,
+                   displayHeight        : Int           = 640,
+                   micDial              : Double        = 0.85,
+                   lowPass              : Int           = 15000, // 0,
                  ) {
 
 }

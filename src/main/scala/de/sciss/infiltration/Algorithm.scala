@@ -170,13 +170,12 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
 
   private def randomizePar(parIdx: Int)(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
-    implicit val itx: I#Tx  = bridge(tx)
 
     log(s"randomizePar($parIdx)")
 
     def perform(): Unit = {
       val v0      = Util.rangeRand(0.0, 1.0)
-      val parVec  = spreadVecLin(v0, 0.0, 1.0)
+      val parVec  = spreadVecLin(v0)
       putParVec(parIdx, parVec)
     }
 
@@ -467,10 +466,30 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     vec.forall(_ == a)
   }
 
-  def spreadVecLin(in: Double, lo: Double, hi: Double): Vec[Double] = {
+  def spreadVecLin(in: Double, lo: Double = 0.0, hi: Double = 1.0): Vec[Double] = {
     import numbers.Implicits._
     val r = (hi - lo) * 0.05
-    Vector.fill(numChannels)((in + Util.rangeRand(-r, r)).clip(lo, hi))
+    Vector.tabulate(numChannels) { ch =>
+      val ta    = trigStates(ch)
+      val tb    = trigStates(ch + 4)
+      val rand  = if (ta ^ tb) {
+        if (ta)
+          Util.rangeRand(0.0, 2 * r)
+        else
+          Util.rangeRand(2 * r, 0.0)
+      } else {
+        Util.rangeRand(-r, r)
+      }
+      (in + rand).clip(lo, hi)
+    }
+  }
+
+  def nudgeVecLin(in: Vec[Double], lo: Double = 0.0, hi: Double = 1.0): Vec[Double] = {
+    import numbers.Implicits._
+    in.map { v =>
+      val r = (hi - lo) * 0.05
+      (v + Util.rangeRand(-r, r)).clip(lo, hi)
+    }
   }
 
   def toggleFilter()(implicit tx: S#Tx): Boolean = {
@@ -567,7 +586,7 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
         val oFlt  = pFlt.outputs.add(mainOut)
 
         val freq0   = Util.rangeRand(0.0, 1.0)
-        val freqV   = spreadVecLin(freq0, 0.0, 1.0)
+        val freqV   = spreadVecLin(freq0)
 
         val hasFreq = keyFreq.nonEmpty
         if (hasFreq) {
@@ -659,7 +678,8 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       val startVal  = oldFadeOpt.fold(vecOne)(_.endVal)
       val pFlt      = pFltH()
       val aFlt      = pFlt.attr
-      val grMix     = mkFade(refFltFade, startVal = startVal, endVal = vecZero, dur = 10.0) { implicit tx =>
+      val dur       = if (Util.coin(0.2)) 1.0 else Util.rangeRand(10.0, 20.0)
+      val grMix     = mkFade(refFltFade, startVal = startVal, endVal = vecZero, dur = dur) { implicit tx =>
         performRemoveFilter(pFltH)
       }
       aFlt.put(attrMix, grMix)
@@ -680,6 +700,7 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     aGen.put(parKey(parIdx), oAdapt1)
   }
 
+  // careful to handle the initial situation where refGen holds null
   def changeNegatum()(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
     implicit val itx: I#Tx  = bridge(tx)
@@ -718,11 +739,11 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       val oGenNew     = pGenNew.outputs.add(mainOut)
       val aGenNew     = pGenNew.attr
       val numParam    =
-        if      (aGenNew.contains("p5")) 5
-        else if (aGenNew.contains("p4")) 4
-        else if (aGenNew.contains("p3")) 3
-        else if (aGenNew.contains("p2")) 2
-        else if (aGenNew.contains("p1")) 1
+        if      (aGenNew.contains(parKey(4))) 5
+        else if (aGenNew.contains(parKey(3))) 4
+        else if (aGenNew.contains(parKey(2))) 3
+        else if (aGenNew.contains(parKey(1))) 2
+        else if (aGenNew.contains(parKey(0))) 1
         else 0  // huh...
 
       refGenNumParam() = numParam
@@ -737,6 +758,28 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
         parIdx
       } else -1
 
+      for (parIdx <- 0 until 5) {
+        if (parIdx != patchIdx) {
+          val oldVec = refGenPar(parIdx).apply()
+          if (oldVec.isEmpty || Util.coin(0.7)) { // do not reuse old value
+            if (Util.coin(0.2)) { // do not use default value; use random one
+              val v0 = Util.rangeRand(0.0, 1.0)
+              putParVec(parIdx, spreadVecLin(v0))
+
+            } else {
+              // ok, don't change; but save for next change
+              val parObjOpt = aGenNew.$[DoubleVector](parKey(parIdx))
+              val parVec    = parObjOpt.fold(Vec.empty[Double])(_.value)
+              val r = refGenPar(parIdx)
+              r()   = parVec
+            }
+          } else { // use old value
+            putParVec(parIdx, nudgeVecLin(oldVec))
+          }
+        }
+        if (parIdx >= numParam) removeParVec(parIdx)
+      }
+
       refAdapt1Patch() = patchIdx
 
       pGenOldOpt.foreach(surface.remove) //  (pGenOld)
@@ -746,32 +789,29 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
   }
 
   private def createBasicStructure()(implicit tx: S#Tx): Unit = {
-    implicit val tx0: InTxn = tx.peer
+//    implicit val tx0: InTxn = tx.peer
     implicit val itx: I#Tx  = bridge(tx)
 
-    val pIdx      = refGraphPos()
+//    val pIdx      = refGraphPos()
     val n         = panel.nuages
     val fGen      = n.generators.get
     val fFlt      = n.filters   .get
     val fCol      = n.collectors.get
-    val grProc    = grProcH()
+//    val grProc    = grProcH()
 
     val programOpt = for {
       pIn0    <- fGen.$[Proc]("in")
       pAdapt0 <- fFlt.$[Proc]("adapt")
-      pGen0S  <- grProc.at(pIdx).flatMap { e =>
-        e.value match {
-          case p: Proc[S] => Some(p)
-          case _ => None
-        }
-      }
+//      pGen0S  <- grProc.at(pIdx).flatMap { e =>
+//        e.value match {
+//          case p: Proc[S] => Some(p)
+//          case _ => None
+//        }
+//      }
       pOut0 <- fCol.$[Proc]("O-inf" /*"O-all"*/)
     } yield {
-//          val g0 = pGen0S.graph.value
-//          val pGen0 = Proc[I]()
-//          pGen0.graph() = g0
       val cpyS    = Copy[S, I]
-      val pGen    = cpyS(pGen0S)
+//      val pGen    = cpyS(pGen0S)
       cpyS.finish()
       val cpyI    = Copy[I, I]
       val pOut    = cpyI(pOut0)
@@ -780,27 +820,28 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       cpyI.finish()
       val aAdapt  = pAdapt.attr
       val aIn     = pIn   .attr
-      val aOut    = pOut  .attr
-      aOut  .put(mainIn, pGen.outputs.add(mainOut))
+//      val aOut    = pOut  .attr
+//      aOut  .put(mainIn, pGen.outputs.add(mainOut))
       aIn   .put("$bal-bus"   , IntObj      .newConst (ciBal))
-      aAdapt.put("gain"       , DoubleVector.newVar   (Vec.fill(numChannels)(0.8)))
-      aAdapt.put(mainIn  , pIn.outputs.add(mainOut))
-//      aAdapt.put(attrMix      , DoubleObj   .newVar(1.0))
-      aAdapt.put(attrMix      , DoubleVector.newVar(vecOne))
-
-//      panel.createGenerator(pGen0 , Some(pCol0) , new Point(200, 200))
-//      panel.createGenerator(pIn0  , None        , new Point(400, 200))
+      if (Network.hasMic(config.dot)) {
+        aIn.put("gain", DoubleVector.newVar(Vec.fill(numChannels)(config.micDial)))
+      }
+      aAdapt.put("gain"   , DoubleVector.newVar   (Vec.fill(numChannels)(0.8)))
+      aAdapt.put(mainIn   , pIn.outputs.add(mainOut))
+      aAdapt.put(attrMix  , DoubleVector.newVar(vecOne))
 
       val surface = surfaceH()
       surface.addLast(pOut  )
-      surface.addLast(pGen  )
+//      surface.addLast(pGen  )
       surface.addLast(pIn   )
       surface.addLast(pAdapt)
 
-      refGen()  = itx.newHandle(pGen)
+//      refGen()  = itx.newHandle(pGen)
       hndOut    = itx.newHandle(pOut)
       hndIn     = itx.newHandle(pIn)
       hndAdapt1 = itx.newHandle(pAdapt)
+
+      changeNegatum()
 
       ()
     }

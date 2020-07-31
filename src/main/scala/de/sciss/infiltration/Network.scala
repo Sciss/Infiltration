@@ -40,7 +40,14 @@ object Network {
     "dc:a6:32:50:8c:2c" -> "192.168.0.46",
   )
 
-  final val dotSeqCtl: Vec[Int] = Vector(36, 37, 40, 42, 43, 44, 77)
+  final val hhDots    : Vec[Int] = Vector(36, 37, 40, 42, 43, 44)
+  final val davidDots : Vec[Int] = Vector(30, 34, 38, 39, 45, 46)
+
+  final val allDots   : Vec[Int] = hhDots ++ davidDots
+
+  final val dotSeqCtl : Vec[Int] = hhDots :+ 77 // with laptop
+
+  def hasMic(dot: Int): Boolean = dotSeqCtl.indexOf(dot) == 5
 
   final val ClientPort = 57120
 
@@ -203,6 +210,18 @@ object Network {
 
     def unapply(p: osc.Packet): Option[Float] = p match {
       case osc.Message(Name, amp: Float) => Some(amp)
+      case _ => None
+    }
+  }
+
+  object OscMute {
+    private[this] val Name = "/mute"
+
+    def apply(state: Boolean): osc.Message =
+      osc.Message(Name, if (state) 1 else 0)
+
+    def unapply(p: osc.Packet): Option[Boolean] = p match {
+      case osc.Message(Name, state: Int) => Some(state != 0)
       case _ => None
     }
   }

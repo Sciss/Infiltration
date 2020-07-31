@@ -29,6 +29,7 @@ object Main {
     "make-chains"       -> MakeChains       .main,
     "convert-grapheme"  -> ConvertGrapheme  .main,
     "sound-check"       -> SoundCheck       .main,
+    "on-off"            -> OnOff            .main,
   )
 
   def main(args: Array[String]): Unit = {

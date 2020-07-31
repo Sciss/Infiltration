@@ -1,6 +1,6 @@
 lazy val commonSettings = Seq(
   name               := "Infiltration",
-  version            := "0.1.3-SNAPSHOT",
+  version            := "0.1.4",
   organization       := "de.sciss",
   scalaVersion       := "2.13.3",
   licenses           := Seq("AGPL v3+" -> url("http://www.gnu.org/licenses/agpl-3.0.txt")),
@@ -27,7 +27,8 @@ lazy val deps = new {
   val negatum         = "0.15.5"
   val soundProcesses  = "3.35.8"
   val submin          = "0.3.4"
-  val wolkenpumpe     = "2.41.3-SNAPSHOT"
+  val wolkenpumpe     = "2.41.3"
+  val pi4j            = "1.2"
 }
 
 lazy val root = project.in(file("."))
@@ -46,6 +47,7 @@ lazy val root = project.in(file("."))
       "de.sciss" %% "soundprocesses-core"  % deps.soundProcesses,
       "de.sciss" %  "submin"        % deps.submin,
       "de.sciss" %% "wolkenpumpe"   % deps.wolkenpumpe,
+      "com.pi4j" %  "pi4j-core"     % deps.pi4j
     ),
     mainClass             in assembly := Some("de.sciss.infiltration.Main"),
     assemblyJarName       in assembly := "Infiltration.jar",

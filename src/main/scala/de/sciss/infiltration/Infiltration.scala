@@ -35,7 +35,7 @@ import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
 object Infiltration {
-  final protected def parseSocket(s: String): Either[String, InetSocketAddress] = {
+  final def parseSocket(s: String): Either[String, InetSocketAddress] = {
     val arr = s.split(':')
     if (arr.length != 2) Left(s"Must be of format <host>:<port>")
     else parseSocket(arr)
@@ -79,14 +79,15 @@ object Infiltration {
     case NonFatal(_) => "?"
   }
 
-  final def name        : String = "in|filtration"
-  final def version     : String = buildInfString("version")
-  final def builtAt     : String = buildInfString("builtAtString")
-  final def fullVersion : String = s"v$version, built $builtAt"
+  final def name          : String = "in|filtration"
+  final def version       : String = buildInfString("version")
+  final def builtAt       : String = buildInfString("builtAtString")
+  final def fullVersion   : String = s"v$version, built $builtAt"
+  final def nameAndVersion: String = s"$name $fullVersion"
 
   def main(args: Array[String]): Unit = {
     object p extends ScallopConf(args) {
-      printedName = s"${Infiltration.name} ${Infiltration.fullVersion}"
+      printedName = Infiltration.nameAndVersion
 
       private val default = Config()
 
@@ -151,6 +152,18 @@ object Infiltration {
       val maxMainGain: Opt[Double] = opt("max-main-gain", default = Some(default.maxMainGain),
         descr = s"Maximum main gain, linear (default: ${default.maxMainGain})"
       )
+      val displayWidth: Opt[Int] = opt("display-width", default = Some(default.displayWidth),
+        descr = s"Wolkenpumpe display width in pixels (default: ${default.displayWidth})"
+      )
+      val displayHeight: Opt[Int] = opt("display-height", default = Some(default.displayHeight),
+        descr = s"Wolkenpumpe display height in pixels (default: ${default.displayHeight})"
+      )
+      val micDial: Opt[Double] = opt("mic-dial", default = Some(default.micDial),
+        descr = s"Microphone gain dial position 0 to 1, for node 12 (default: ${default.micDial})"
+      )
+      val lowPass: Opt[Int] = opt("low-pass", default = Some(default.lowPass),
+        descr = s"Main low-pass frequency or 0 for no low-pass (default: ${default.lowPass})"
+      )
 
       verify()
 
@@ -172,6 +185,10 @@ object Infiltration {
         flipTrigDurSec      = flipTrigDurSec(),
         forgetDurSec        = forgetDurSec(),
         maxMainGain         = maxMainGain(),
+        displayWidth        = displayWidth(),
+        displayHeight       = displayHeight(),
+        micDial             = micDial(),
+        lowPass             = lowPass(),
       )
     }
 
@@ -238,7 +255,7 @@ object Infiltration {
         nCfg.showTransport  = false
         nCfg.showFrame      = config.display
         nCfg.meters         = config.display
-        nCfg.displaySize    = (1024, 720)
+        nCfg.displaySize    = (config.displayWidth, config.displayHeight)
         sCfg.highPass       = config.highPass
         aCfg.deviceName     = Some(deviceName)
       }
@@ -387,8 +404,9 @@ object Infiltration {
             val sig0 = sig out i
             val hpf  = sCfg.highPass
             val sig1 = if (hpf >= 16 && hpf < 20000) HPF.ar(sig0, hpf) else sig0
+            val sig2 = if (config.lowPass > 0) LPF.ar(sig1, config.lowPass) else sig1
 //            sig1.poll(2, s"sig[$ch]")
-            Out.ar(ch, sig1)   // XXX TODO - should go to a bus w/ limiter
+            Out.ar(ch, sig2)   // XXX TODO - should go to a bus w/ limiter
           }
         }
       }
@@ -415,6 +433,10 @@ object Infiltration {
     val panel = view.panel
     Swing.onEDT {
       panel.display.setHighQuality(false)
+
+      w.frame.foreach { f =>
+        f.frame.title = s"$nameAndVersion - .${config.dot}"
+      }
 
       def button(name: String)(fun: => Unit): Unit = {
         val b = Button(name)(fun)
