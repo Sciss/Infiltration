@@ -39,6 +39,8 @@ case class Config(
                    displayHeight        : Int           = 640,
                    micDial              : Double        = 0.85,
                    lowPass              : Int           = 15000, // 0,
+                   mainVolume           : Double        = 0.75,
+                   badPitchCount        : Int           = 1800, // 2200
                  ) {
 
 }

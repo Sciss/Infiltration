@@ -92,6 +92,8 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
     }
 
   def init()(implicit tx: S#Tx): this.type = {
+    implicit val itx: I#Tx  = bridge(tx)
+
     tx.afterCommit {
       OscClient(this, config, localSocketAddress).init()
       Sensors  (this, config).init()
@@ -106,6 +108,8 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       }
     }
 
+    panel.setMainVolume(config.mainVolume)
+
 //    tx.afterCommit {
 //      server.peer.dumpTree(controls = true)
 //    }
@@ -119,10 +123,10 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
   private def analysisUpdate(peak: Double, badCnt: Int)(implicit tx: S#Tx): Unit = {
     implicit val tx0: InTxn = tx.peer
 
-    def testThresh(c: Int, thresh1: Int, name: String): Unit = {
+    def testThresh(c: Int, thresh1: Int, thresh2: Int, name: String): Unit = {
       if (c >= thresh1) { // start trying modifications
         log(s"too $name ($c)")
-        val thresh2 = thresh1 + 4
+//        val thresh2 = thresh1 + 4
         val numParam = refGenNumParam()
         if (c >= thresh2 || numParam == 0) { // tried four different things without effect
           changeNegatum()
@@ -136,17 +140,17 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
 
     if (peak > 0.05) {
       lowVolumeCount() = 0
-      if (badCnt < 2200) {
+      if (badCnt < config.badPitchCount) {
         badPitchCount() = 0
       } else {
         val c = badPitchCount.transformAndGet(_ + 1)
-        testThresh(c, 3, "much static pitch")
+        testThresh(c, 3, 7, "much static pitch")
       }
 
     } else {
       badPitchCount() = 0
       val c = lowVolumeCount.transformAndGet(_ + 1)
-      testThresh(c, 6, "silent")
+      testThresh(c, 6, 11, "silent")
     }
   }
 

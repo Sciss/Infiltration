@@ -164,6 +164,12 @@ object Infiltration {
       val lowPass: Opt[Int] = opt("low-pass", default = Some(default.lowPass),
         descr = s"Main low-pass frequency or 0 for no low-pass (default: ${default.lowPass})"
       )
+      val mainVolume: Opt[Double] = opt("main-volume", default = Some(default.mainVolume),
+        descr = s"Main volume, linear (default: ${default.mainVolume})"
+      )
+      val badPitchCount: Opt[Int] = opt("bad-pitch-count", default = Some(default.badPitchCount),
+        descr = s"Counter when bad pitch is being treated (default: ${default.badPitchCount})"
+      )
 
       verify()
 
@@ -189,6 +195,8 @@ object Infiltration {
         displayHeight       = displayHeight(),
         micDial             = micDial(),
         lowPass             = lowPass(),
+        mainVolume          = mainVolume(),
+        badPitchCount       = badPitchCount(),
       )
     }
 

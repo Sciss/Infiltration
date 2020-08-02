@@ -42,7 +42,7 @@ class OscClient(val config      : Config,
                 val scene       : SoundScene,
                ) {
 
-  private[this] var mainVol = 1f
+  private[this] var mainVol = config.mainVolume
 
   def oscReceived(p: osc.Packet, sender: SocketAddress): Unit = p match {
     case Network.OscSetVolume(amp) =>
@@ -50,7 +50,9 @@ class OscClient(val config      : Config,
       scene.setMainVolume(amp)
 
     case Network.OscMute(state) =>
-      scene.setMainVolume(if (state) 0f else mainVol)
+      val vol = if (state) 0f else mainVol
+//      println(s"-- mute: $state - $vol")
+      scene.setMainVolume(vol)
 
     case Network.OscStart() =>
       scene.start()
