@@ -397,7 +397,7 @@ class Algorithm[S <: Sys[S], I <: Sys[I]](
       }
       oldAbsOpt match {
         case Some(DoubleVector.Var(vr)) => vr() = newAbs
-        case _ => aAdapt1.put(attrLo, DoubleVector.newVar[I](newAbs))
+        case _ => aAdapt1.put(attrLo, DoubleVector.newVar[I](newAbs)) // this ought to have been `attrAbs` I guess
       }
     }
 
